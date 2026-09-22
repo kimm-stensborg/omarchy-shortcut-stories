@@ -1,0 +1,746 @@
+// Pure helpers for the Shortcut Stories panel: reference lookups, the picker
+// lists, the create body, and the story list. Nothing here touches QML, so
+// test.sh can run it under node.
+
+// ---- small things.
+
+function str(value) {
+  return value === null || value === undefined ? "" : String(value)
+}
+
+function trim(value) {
+  return str(value).replace(/^\s+|\s+$/g, "")
+}
+
+function byName(a, b) {
+  var x = str(a.name).toLowerCase(), y = str(b.name).toLowerCase()
+  return x < y ? -1 : (x > y ? 1 : 0)
+}
+
+// ---- reference data.
+
+// Reference data is cached on disk for hours, so everything that reads it has
+// to cope with it being absent, empty, or a shape an older version wrote.
+function refsAreStale(refs, nowSeconds, ttl) {
+  if (!refs || refs.ok !== true) return true
+  if (refs.stale === true) return true
+  var at = parseInt(refs.fetchedAt, 10)
+  if (!isFinite(at)) return true
+  return (nowSeconds - at) >= ttl
+}
+
+function findGroup(refs, groupId) {
+  var list = (refs && refs.groups) || []
+  var wanted = str(groupId)
+  if (wanted === "") return null
+  for (var i = 0; i < list.length; i++) if (str(list[i].id) === wanted) return list[i]
+  return null
+}
+
+function findWorkflow(refs, workflowId) {
+  var list = (refs && refs.workflows) || []
+  for (var i = 0; i < list.length; i++) if (list[i].id === workflowId) return list[i]
+  return null
+}
+
+// The workflow a state belongs to, and the state itself. Every state id in the
+// workspace is unique, so this is a lookup and not a guess.
+function findState(refs, stateId) {
+  var list = (refs && refs.workflows) || []
+  for (var i = 0; i < list.length; i++) {
+    var states = list[i].states || []
+    for (var j = 0; j < states.length; j++)
+      if (states[j].id === stateId) return { workflow: list[i], state: states[j] }
+  }
+  return null
+}
+
+function findMember(refs, memberId) {
+  var list = (refs && refs.members) || []
+  var wanted = str(memberId)
+  if (wanted === "") return null
+  for (var i = 0; i < list.length; i++) if (str(list[i].id) === wanted) return list[i]
+  return null
+}
+
+function findIteration(refs, iterationId) {
+  var list = (refs && refs.iterations) || []
+  for (var i = 0; i < list.length; i++) if (list[i].id === iterationId) return list[i]
+  return null
+}
+
+// A team's workflow. default_workflow_id is nullable in the API, hence the
+// fallback to the first workflow the team is attached to.
+function workflowForGroup(refs, groupId) {
+  var group = findGroup(refs, groupId)
+  if (!group) return null
+  var id = group.defaultWorkflowId
+  if (id === null || id === undefined) {
+    var ids = group.workflowIds || []
+    id = ids.length ? ids[0] : null
+  }
+  return id === null || id === undefined ? null : findWorkflow(refs, id)
+}
+
+// Where a new story lands. A story's board is decided by its workflow_state_id
+// and not by its group_id, so sending a team without a state files it under the
+// right team on the workspace's default board -- a column that team never
+// looks at. Resolving the state is a correctness fix, not a nicety.
+function defaultStateFor(refs, groupId) {
+  var workflow = workflowForGroup(refs, groupId)
+  if (!workflow) return null
+  var id = workflow.defaultStateId
+  if (id === null || id === undefined) {
+    var states = statesOf(workflow)
+    id = states.length ? states[0].id : null
+  }
+  return id === null || id === undefined ? null : { workflowId: workflow.id, stateId: id }
+}
+
+function statesOf(workflow) {
+  return ((workflow && workflow.states) || []).slice().sort(function(a, b) {
+    return (a.position || 0) - (b.position || 0)
+  })
+}
+
+// The states a story may be moved to: its own workflow's, and no other. The
+// API will happily accept a state from a different workflow and move the story
+// to a board nobody on that team reads, so the picker never offers one.
+function statesForStory(refs, story) {
+  var found = story ? findState(refs, story.workflowStateId) : null
+  return found ? statesOf(found.workflow) : []
+}
+
+// ---- pickers.
+
+function groupOptions(refs) {
+  var list = ((refs && refs.groups) || []).slice().sort(byName)
+  var out = [{ value: "", label: "No team" }]
+  for (var i = 0; i < list.length; i++)
+    out.push({ value: str(list[i].id), label: str(list[i].name) })
+  return out
+}
+
+// You first, because most stories you write are yours. Everyone else by name.
+function memberOptions(refs, meId) {
+  var list = ((refs && refs.members) || []).slice().sort(byName)
+  var mine = str(meId)
+  var out = [{ value: "", label: "Unassigned" }]
+  for (var i = 0; i < list.length; i++) {
+    if (str(list[i].id) !== mine) continue
+    out.push({ value: mine, label: "Me (@" + str(list[i].mentionName) + ")" })
+    break
+  }
+  for (var j = 0; j < list.length; j++) {
+    if (str(list[j].id) === mine) continue
+    out.push({ value: str(list[j].id), label: str(list[j].name) })
+  }
+  return out
+}
+
+// An iteration is current when today falls inside it. Shortcut does not check
+// that an iteration belongs to the team you picked, so filtering by team is a
+// convenience here rather than a rule the API would enforce.
+function iterationIsCurrent(iteration, todayIso) {
+  var today = str(todayIso).slice(0, 10)
+  if (today === "") return false
+  var from = str(iteration.startDate).slice(0, 10)
+  var to = str(iteration.endDate).slice(0, 10)
+  if (from === "" || to === "") return false
+  return from <= today && today <= to
+}
+
+function iterationOptions(refs, groupId, todayIso, limit) {
+  var list = ((refs && refs.iterations) || []).filter(function(it) {
+    return str(it.status) !== "done"
+  })
+  var team = str(groupId)
+  if (team !== "") {
+    list = list.filter(function(it) {
+      var ids = it.groupIds || []
+      // An iteration with no team on it belongs to the whole workspace.
+      return ids.length === 0 || ids.map(str).indexOf(team) !== -1
+    })
+  }
+  list = list.slice().sort(function(a, b) {
+    var ac = iterationIsCurrent(a, todayIso) ? 0 : 1
+    var bc = iterationIsCurrent(b, todayIso) ? 0 : 1
+    if (ac !== bc) return ac - bc
+    return str(a.startDate) < str(b.startDate) ? -1 : (str(a.startDate) > str(b.startDate) ? 1 : 0)
+  })
+  var cap = limit === undefined ? 30 : limit
+  var out = [{ value: "", label: "No iteration" }]
+  for (var i = 0; i < list.length && i < cap; i++) {
+    var it = list[i]
+    out.push({
+      value: String(it.id),
+      label: str(it.name) + (iterationIsCurrent(it, todayIso) ? " · current" : "")
+    })
+  }
+  return out
+}
+
+// Three types, and the API rejects anything else with a 422 nobody can read.
+// Three buttons rather than a dropdown keeps an invalid value unreachable.
+var STORY_TYPES = [
+  { value: "feature", label: "Feature", glyph: "" },
+  { value: "bug", label: "Bug", glyph: "" },
+  { value: "chore", label: "Chore", glyph: "" }
+]
+
+function storyTypes() {
+  return STORY_TYPES.slice()
+}
+
+function storyGlyph(type) {
+  for (var i = 0; i < STORY_TYPES.length; i++)
+    if (STORY_TYPES[i].value === str(type)) return STORY_TYPES[i].glyph
+  return STORY_TYPES[0].glyph
+}
+
+// ---- the form.
+
+function emptyForm(defaults) {
+  var d = defaults || {}
+  return {
+    name: "",
+    description: "",
+    storyType: str(d.storyType) || "feature",
+    groupId: str(d.groupId),
+    iterationId: str(d.iterationId),
+    ownerId: str(d.ownerId)
+  }
+}
+
+function validateForm(form) {
+  var name = trim(form && form.name)
+  if (name === "") return { ok: false, errors: { name: "A story needs a name" } }
+  if (name.length > 512) return { ok: false, errors: { name: "That name is too long for Shortcut" } }
+  return { ok: true, errors: {} }
+}
+
+// What goes on bin/shortcut's stdin. Empty fields are left out entirely rather
+// than sent as null, so a name-only form posts exactly {"name": "..."}.
+function buildCreateRequest(form, refs) {
+  var body = { name: trim(form && form.name) }
+  var description = str(form && form.description).replace(/\s+$/, "")
+  if (description !== "") body.description = description
+
+  var type = str(form && form.storyType)
+  body.storyType = type === "" ? "feature" : type
+
+  var group = str(form && form.groupId)
+  if (group !== "") {
+    body.groupId = group
+    var landing = defaultStateFor(refs, group)
+    // No workflow in the cache means no state to name. Leaving it out lets
+    // Shortcut apply its own default, which beats guessing wrong.
+    if (landing) body.workflowStateId = landing.stateId
+  }
+
+  var iteration = parseInt(str(form && form.iterationId), 10)
+  if (isFinite(iteration)) body.iterationId = iteration
+
+  var owner = str(form && form.ownerId)
+  if (owner !== "") body.ownerId = owner
+
+  return body
+}
+
+// Is there anything here worth a second Esc before it is thrown away?
+function draftIsDirty(form, defaults) {
+  var base = emptyForm(defaults)
+  if (!form) return false
+  if (trim(form.name) !== "") return true
+  if (trim(form.description) !== "") return true
+  if (str(form.storyType) !== base.storyType) return true
+  if (str(form.groupId) !== base.groupId) return true
+  if (str(form.iterationId) !== base.iterationId) return true
+  if (str(form.ownerId) !== base.ownerId) return true
+  return false
+}
+
+// After filing one. Team, iteration and owner stay put when sticky: five
+// stories in a row usually belong to the same sprint.
+function clearForm(form, defaults, sticky) {
+  var next = emptyForm(defaults)
+  if (sticky && form) {
+    next.groupId = str(form.groupId)
+    next.iterationId = str(form.iterationId)
+    next.ownerId = str(form.ownerId)
+  }
+  return next
+}
+
+// The line under the form: where this story is about to land.
+function destinationLabel(form, refs) {
+  var group = findGroup(refs, form && form.groupId)
+  if (!group) return "Your workspace's default workflow"
+  var landing = defaultStateFor(refs, str(group.id))
+  if (!landing) return str(group.name)
+  var found = findState(refs, landing.stateId)
+  return str(group.name) + " → " + (found ? str(found.state.name) : "its default state")
+}
+
+// ---- the story list.
+
+function summarizeStory(story, refs) {
+  var found = story ? findState(refs, story.workflowStateId) : null
+  var group = findGroup(refs, story && story.groupId)
+  var iteration = findIteration(refs, story && story.iterationId)
+  return {
+    id: story ? story.id : null,
+    ref: story && story.id !== null && story.id !== undefined ? "sc-" + story.id : "",
+    name: str(story && story.name),
+    storyType: str(story && story.storyType),
+    glyph: storyGlyph(story && story.storyType),
+    appUrl: str(story && story.appUrl),
+    workflowStateId: story ? story.workflowStateId : null,
+    stateName: found ? str(found.state.name) : "Unknown",
+    stateType: found ? str(found.state.type) : "",
+    statePosition: found ? (found.state.position || 0) : 0,
+    groupName: group ? str(group.name) : "",
+    iterationName: iteration ? str(iteration.name) : "",
+    updatedAt: str(story && story.updatedAt)
+  }
+}
+
+// One story opened up. Everything the panel shows is resolved here against the
+// reference cache, so the detail view is a layout and holds no lookups.
+function storyDetail(raw, refs) {
+  if (!raw) return null
+  var base = summarizeStory(raw, refs)
+  var owners = (raw.ownerIds || []).map(function(id) {
+    var m = findMember(refs, id)
+    return m ? str(m.name) : "Someone who has left"
+  })
+  var requester = findMember(refs, raw.requestedById)
+  var tasks = raw.tasks || []
+  var done = tasks.filter(function(t) { return t.complete === true }).length
+
+  base.description = str(raw.description)
+  base.owners = owners
+  base.ownerLabel = owners.length ? owners.join(", ") : "Unassigned"
+  base.requesterName = requester ? str(requester.name) : ""
+  base.labels = raw.labels || []
+  base.tasks = tasks
+  base.taskLabel = tasks.length ? done + " of " + tasks.length + " done" : ""
+  base.estimate = raw.estimate === null || raw.estimate === undefined ? null : raw.estimate
+  base.estimateLabel = base.estimate === null ? ""
+    : (base.estimate === 1 ? "1 point" : base.estimate + " points")
+  base.deadline = str(raw.deadline).slice(0, 10)
+  base.commentCount = raw.commentCount || 0
+  base.createdAt = str(raw.createdAt)
+  return base
+}
+
+// The metadata rows the detail view prints, with the empty ones left out so a
+// bare story does not show a column of blanks.
+function detailFacts(detail) {
+  if (!detail) return []
+  var rows = [
+    { label: "State", value: detail.stateName },
+    { label: "Team", value: detail.groupName },
+    { label: "Iteration", value: detail.iterationName },
+    { label: "Owner", value: detail.ownerLabel },
+    { label: "Requested by", value: detail.requesterName },
+    { label: "Estimate", value: detail.estimateLabel },
+    { label: "Deadline", value: detail.deadline },
+    { label: "Labels", value: (detail.labels || []).join(", ") },
+    { label: "Tasks", value: detail.taskLabel }
+  ]
+  return rows.filter(function(r) {
+    return r.value !== "" && r.value !== null && r.value !== undefined
+  })
+}
+
+var STATE_TYPE_ORDER = ["started", "unstarted", "backlog", "done"]
+
+// Grouped by what kind of state the story is in, because "what am I doing" and
+// "what is waiting" are the two questions this list answers.
+function sectionStories(stories, refs, showDone) {
+  var summaries = (stories || []).map(function(s) { return summarizeStory(s, refs) })
+  var sections = []
+  for (var i = 0; i < STATE_TYPE_ORDER.length; i++) {
+    var type = STATE_TYPE_ORDER[i]
+    if (type === "done" && !showDone) continue
+    var rows = summaries.filter(function(s) { return s.stateType === type })
+    if (!rows.length) continue
+    rows.sort(function(a, b) {
+      if (a.statePosition !== b.statePosition) return a.statePosition - b.statePosition
+      return a.updatedAt < b.updatedAt ? 1 : (a.updatedAt > b.updatedAt ? -1 : 0)
+    })
+    sections.push({ type: type, title: sectionTitle(type), stories: rows })
+  }
+  // A story whose state is not in the cache would otherwise vanish from a list
+  // that is meant to show everything assigned to you.
+  var orphans = summaries.filter(function(s) { return STATE_TYPE_ORDER.indexOf(s.stateType) === -1 })
+  if (orphans.length) sections.push({ type: "unknown", title: "Elsewhere", stories: orphans })
+  return sections
+}
+
+function sectionTitle(type) {
+  if (type === "started") return "In progress"
+  if (type === "unstarted") return "Ready"
+  if (type === "backlog") return "Backlog"
+  if (type === "done") return "Done"
+  return "Elsewhere"
+}
+
+// Optimistic updates. Shortcut's search index trails a write by seconds, so
+// the list has to be told what just happened rather than waiting to be asked.
+function applyMove(stories, storyId, stateId) {
+  return (stories || []).map(function(s) {
+    if (s.id !== storyId) return s
+    var copy = {}
+    for (var k in s) copy[k] = s[k]
+    copy.workflowStateId = stateId
+    return copy
+  })
+}
+
+function prependCreated(stories, story) {
+  var list = (stories || []).filter(function(s) { return s.id !== (story && story.id) })
+  return story ? [story].concat(list) : list
+}
+
+function relativeTime(iso, nowSeconds) {
+  var at = Date.parse(str(iso))
+  if (!isFinite(at)) return ""
+  var seconds = Math.round(nowSeconds - at / 1000)
+  if (seconds < 90) return "just now"
+  var minutes = Math.round(seconds / 60)
+  if (minutes < 60) return minutes + " min ago"
+  var hours = Math.round(minutes / 60)
+  if (hours < 24) return hours + (hours === 1 ? " hour ago" : " hours ago")
+  var days = Math.round(hours / 24)
+  return days + (days === 1 ? " day ago" : " days ago")
+}
+
+// ---- settings.
+// The same shape tessie uses, so SettingsColumn.qml renders it unchanged. The
+// list is duplicated as barWidget.schema in manifest.json because the shell
+// reads that one; test.sh asserts the two agree.
+
+var SETTINGS = [
+  { title: "New stories", rows: [
+    // `picker` rows take their options from the workspace rather than from
+    // this file, so the list is whatever your teams and sprints actually are.
+    { key: "defaultTeam", kind: "picker", source: "teams", label: "Team", fallback: "",
+      hint: "The team a new story starts on" },
+    { key: "defaultIteration", kind: "picker", source: "iterations", label: "Iteration", fallback: "",
+      hint: "A sprint by name, or whichever one today falls inside" },
+    { key: "defaultOwner", kind: "picker", source: "members", label: "Owner", fallback: "me" },
+    { key: "defaultType", kind: "choice", label: "Type", fallback: "feature",
+      options: [{ value: "feature", label: "Feature" }, { value: "bug", label: "Bug" },
+                { value: "chore", label: "Chore" }] },
+    { key: "stickyFields", kind: "toggle", label: "Keep team and iteration after filing", fallback: true }
+  ]},
+  { title: "In the bar", rows: [
+    { key: "barLabel", kind: "choice", label: "Next to the glyph", fallback: "count",
+      options: [{ value: "none", label: "Nothing" }, { value: "count", label: "Open stories" },
+                { value: "started", label: "In progress" }] }
+  ]},
+  { title: "In the panel", rows: [
+    { key: "defaultMode", kind: "choice", label: "Opens on", fallback: "compose",
+      options: [{ value: "compose", label: "New story" }, { value: "mine", label: "My stories" }] },
+    { key: "showDone", kind: "toggle", label: "Show finished stories", fallback: false }
+  ]},
+  { title: "Data", rows: [
+    { key: "refreshMinutes", kind: "number", label: "Refresh while closed (minutes)",
+      fallback: 5, min: 1, max: 60 },
+    { key: "demo", kind: "toggle", label: "Demo workspace", fallback: false,
+      hint: "A made-up workspace; never calls Shortcut" }
+  ]}
+]
+
+// What a picker row offers. The values are what get stored, so they have to
+// survive a workspace that changes underneath them: "me" and "current" are
+// kept as words rather than resolved to an id at the time you pick them.
+function settingOptions(row, refs, todayIso, groupId) {
+  if (!row) return []
+  if (row.kind !== "picker") return row.options || []
+  if (row.source === "teams") return groupOptions(refs)
+  if (row.source === "members") {
+    var people = [{ value: "", label: "Unassigned" }, { value: "me", label: "Me" }]
+    var meId = refs && refs.me ? str(refs.me.id) : ""
+    var list = ((refs && refs.members) || []).slice().sort(byName)
+    for (var i = 0; i < list.length; i++) {
+      if (str(list[i].id) === meId) continue
+      people.push({ value: str(list[i].id), label: str(list[i].name) })
+    }
+    return people
+  }
+  if (row.source === "iterations") {
+    var out = [{ value: "", label: "No iteration" },
+               { value: "current", label: "Whichever one is current" }]
+    var its = iterationOptions(refs, groupId === undefined ? "" : groupId, todayIso)
+    // iterationOptions leads with its own "No iteration"; ours is already there.
+    for (var j = 1; j < its.length; j++) out.push(its[j])
+    return out
+  }
+  return []
+}
+
+// A stored team setting as a group id. An id is what the picker writes, but a
+// name typed at a terminal has to keep working, so both are accepted.
+function resolveTeamSetting(refs, value) {
+  var wanted = trim(value)
+  if (wanted === "") return ""
+  if (findGroup(refs, wanted)) return wanted
+  var list = (refs && refs.groups) || []
+  for (var i = 0; i < list.length; i++)
+    if (str(list[i].name).toLowerCase() === wanted.toLowerCase()) return str(list[i].id)
+  return ""
+}
+
+// "me" follows the account rather than pinning a uuid, so the setting still
+// means you after a re-invite.
+function resolveOwnerSetting(refs, value) {
+  var wanted = trim(value)
+  if (wanted === "") return ""
+  if (wanted === "me") return refs && refs.me ? str(refs.me.id) : ""
+  return findMember(refs, wanted) ? wanted : ""
+}
+
+// "current" is the iteration today falls inside, on the team in hand. A
+// pinned iteration that has since finished, or belongs to another team, is
+// dropped rather than sent.
+function resolveIterationSetting(refs, value, groupId, todayIso) {
+  var wanted = trim(value)
+  if (wanted === "") return ""
+  var allowed = iterationOptions(refs, groupId, todayIso)
+  if (wanted === "current") {
+    for (var i = 1; i < allowed.length; i++)
+      if (allowed[i].label.indexOf("\u00b7 current") !== -1) return allowed[i].value
+    return ""
+  }
+  for (var j = 1; j < allowed.length; j++) if (allowed[j].value === wanted) return wanted
+  return ""
+}
+
+function settingRow(key) {
+  for (var s = 0; s < SETTINGS.length; s++) {
+    var rows = SETTINGS[s].rows
+    for (var r = 0; r < rows.length; r++) if (rows[r].key === key) return rows[r]
+  }
+  return null
+}
+
+// A multi-value setting. Stored as an array, but it may arrive as a string:
+// `omarchy bar set` splits its own arguments on commas, so a list typed at a
+// terminal has to be space-separated, and a hand-edited shell.json is as
+// likely to use commas. Both read the same here.
+function choiceList(value) {
+  var list = Array.isArray(value)
+    ? value
+    : String(value === null || value === undefined ? "" : value).split(/[,\s]+/)
+  return list.map(function(v) { return String(v).replace(/^\s+|\s+$/g, "") })
+             .filter(function(v) { return v !== "" })
+}
+
+// A stored value as the widget should use it: absent, out of range or simply
+// wrong reads as the default rather than breaking the panel.
+function coerceSetting(row, raw) {
+  if (!row) return raw
+  var missing = raw === undefined || raw === null
+  if (row.kind === "toggle") {
+    if (missing || raw === "") return row.fallback === true
+    return raw === true || ["true", "on", "yes", "1"].indexOf(String(raw).toLowerCase()) !== -1
+  }
+  if (row.kind === "number") {
+    var n = parseInt(raw, 10)
+    if (!isFinite(n)) n = row.fallback
+    return Math.max(row.min, Math.min(row.max, n))
+  }
+  if (row.kind === "multi") {
+    var allowed = row.options.map(function(o) { return o.value })
+    if (missing || raw === "") return row.fallback.slice()
+    return choiceList(raw).filter(function(v) { return allowed.indexOf(v) !== -1 })
+  }
+  if (row.kind === "picker") return String(missing ? row.fallback : raw)
+  if (row.kind === "choice") {
+    var picked = String(missing ? row.fallback : raw)
+    return row.options.some(function(o) { return o.value === picked }) ? picked : row.fallback
+  }
+  return String(missing ? "" : raw)
+}
+
+function readSetting(settings, key) {
+  return coerceSetting(settingRow(key), settings ? settings[key] : undefined)
+}
+
+function isDefaultSetting(row, value) {
+  if (!row) return false
+  if (row.kind === "multi") {
+    if (value === null || value === undefined) return true
+    var chosen = choiceList(value)
+    return chosen.length === row.fallback.length
+      && row.fallback.every(function(v) { return chosen.indexOf(v) !== -1 })
+  }
+  if (row.kind === "text") return trim(value) === ""
+  return value === row.fallback
+}
+
+// The whole shell.json entry a change leaves behind. updateEntryInline
+// replaces the entry rather than merging into it, so every other key has to be
+// carried across; a value back at its default is dropped instead of written.
+// `changes` of null clears every option this page owns.
+function nextEntry(settings, id, changes) {
+  var entry = { id: String(id || "") }
+  for (var existing in settings) if (existing !== "id") entry[existing] = settings[existing]
+  if (changes === null) {
+    for (var s = 0; s < SETTINGS.length; s++)
+      SETTINGS[s].rows.forEach(function(row) { delete entry[row.key] })
+    return entry
+  }
+  for (var key in changes) {
+    var row = settingRow(key)
+    var value = changes[key]
+    if (row && isDefaultSetting(row, value)) delete entry[key]
+    else if (row && row.kind === "text") entry[key] = trim(value)
+    else entry[key] = value
+  }
+  return entry
+}
+
+function hasCustomSettings(settings) {
+  for (var s = 0; s < SETTINGS.length; s++) {
+    var rows = SETTINGS[s].rows
+    for (var r = 0; r < rows.length; r++) {
+      var raw = settings ? settings[rows[r].key] : undefined
+      if (raw !== undefined && raw !== null && !isDefaultSetting(rows[r], coerceSetting(rows[r], raw)))
+        return true
+    }
+  }
+  return false
+}
+
+function toggleChoice(row, value, option) {
+  var all = row.options.map(function(o) { return o.value })
+  var current = value === null || value === undefined ? row.fallback.slice() : choiceList(value)
+  if (current.indexOf(option) !== -1)
+    return current.filter(function(v) { return v !== option })
+  return all.filter(function(v) { return v === option || current.indexOf(v) !== -1 })
+}
+
+var ROW_WEIGHT = { text: 3, multi: 3, picker: 3, choice: 2, number: 2, toggle: 2 }
+
+function sectionWeight(section) {
+  return section.rows.reduce(function(sum, row) {
+    return sum + (ROW_WEIGHT[row.kind] || 2)
+  }, 1)
+}
+
+// The sections dealt into `count` columns, in order, so that the tallest
+// column comes out as short as it can.
+function settingsColumns(count) {
+  var wanted = Math.max(1, Math.min(Math.round(count) || 1, SETTINGS.length))
+  var weights = SETTINGS.map(sectionWeight)
+  var best = null
+
+  function tallestOf(cuts) {
+    var tallest = 0
+    var from = 0
+    for (var i = 0; i < cuts.length; i++) {
+      var sum = 0
+      for (var j = from; j < cuts[i]; j++) sum += weights[j]
+      if (sum > tallest) tallest = sum
+      from = cuts[i]
+    }
+    return tallest
+  }
+
+  // Only contiguous splits, so the sections stay in the order they are read.
+  function walk(start, left, cuts) {
+    if (left === 1) {
+      var all = cuts.concat([SETTINGS.length])
+      var tallest = tallestOf(all)
+      if (best === null || tallest < best.tallest) best = { tallest: tallest, cuts: all }
+      return
+    }
+    for (var cut = start + 1; cut <= SETTINGS.length - (left - 1); cut++)
+      walk(cut, left - 1, cuts.concat([cut]))
+  }
+  walk(0, wanted, [])
+
+  var columns = []
+  var from = 0
+  for (var i = 0; i < best.cuts.length; i++) {
+    columns.push(SETTINGS.slice(from, best.cuts[i]))
+    from = best.cuts[i]
+  }
+  return columns
+}
+
+// This widget's entry in the bar config the shell hands a plugin, which is
+// where the overlay reads the settings it is about to change.
+function entryFor(barConfig, id) {
+  var layout = barConfig && barConfig.layout ? barConfig.layout : {}
+  var wanted = String(id || "")
+  var sections = ["left", "center", "right"]
+  for (var s = 0; s < sections.length; s++) {
+    var arr = layout[sections[s]] || []
+    for (var i = 0; i < arr.length; i++) {
+      // Clones carry a "#2" suffix; the id in front of it is the plugin's.
+      if (arr[i] && String(arr[i].id || "").split("#")[0] === wanted) return arr[i]
+    }
+  }
+  return { id: wanted }
+}
+
+function settingsSummary(settings) {
+  return hasCustomSettings(settings) ? "Changed from the defaults" : "All at their defaults"
+}
+
+// Stories still to do. A story moved to a done state stays in the list we
+// hold -- it is still assigned to you -- but counting it would make the
+// header disagree with the rows underneath it.
+function openCount(stories, refs) {
+  return (stories || []).filter(function(s) {
+    var found = findState(refs, s.workflowStateId)
+    return !found || str(found.state.type) !== "done"
+  }).length
+}
+
+function startedCount(stories, refs) {
+  return (stories || []).filter(function(s) {
+    var found = findState(refs, s.workflowStateId)
+    return found && str(found.state.type) === "started"
+  }).length
+}
+
+// What the bar shows next to the glyph.
+function barLabel(stories, refs, mode) {
+  if (mode === "none") return ""
+  var n = mode === "started" ? startedCount(stories, refs) : openCount(stories, refs)
+  return n ? String(n) : ""
+}
+
+if (typeof module !== "undefined") {
+  module.exports = {
+    refsAreStale: refsAreStale, findGroup: findGroup, findWorkflow: findWorkflow,
+    findState: findState, findMember: findMember, findIteration: findIteration,
+    workflowForGroup: workflowForGroup, defaultStateFor: defaultStateFor,
+    statesOf: statesOf, statesForStory: statesForStory,
+    groupOptions: groupOptions, memberOptions: memberOptions,
+    iterationOptions: iterationOptions, iterationIsCurrent: iterationIsCurrent,
+    storyTypes: storyTypes, storyGlyph: storyGlyph,
+    emptyForm: emptyForm, validateForm: validateForm,
+    buildCreateRequest: buildCreateRequest, draftIsDirty: draftIsDirty,
+    clearForm: clearForm, destinationLabel: destinationLabel,
+    summarizeStory: summarizeStory, storyDetail: storyDetail,
+    detailFacts: detailFacts, sectionStories: sectionStories,
+    sectionTitle: sectionTitle, applyMove: applyMove,
+    prependCreated: prependCreated, relativeTime: relativeTime,
+    SETTINGS: SETTINGS, settingRow: settingRow, choiceList: choiceList,
+    coerceSetting: coerceSetting, readSetting: readSetting,
+    isDefaultSetting: isDefaultSetting, nextEntry: nextEntry,
+    hasCustomSettings: hasCustomSettings, toggleChoice: toggleChoice,
+    sectionWeight: sectionWeight, settingsColumns: settingsColumns,
+    entryFor: entryFor, settingsSummary: settingsSummary, barLabel: barLabel,
+    openCount: openCount, startedCount: startedCount,
+    settingOptions: settingOptions, resolveTeamSetting: resolveTeamSetting,
+    resolveOwnerSetting: resolveOwnerSetting, resolveIterationSetting: resolveIterationSetting
+  }
+}

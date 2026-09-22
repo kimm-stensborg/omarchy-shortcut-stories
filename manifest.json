@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.kimm-stensborg.shortcut-stories",
+  "name": "Shortcut Stories",
+  "version": "0.1.0",
+  "author": "Kimm Stensborg",
+  "license": "MIT",
+  "description": "Write a Shortcut story from a panel on a keybinding, and move the ones assigned to you",
+  "kinds": [
+    "service",
+    "bar-widget",
+    "overlay"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Store.qml",
+    "barWidget": "BarWidget.qml",
+    "overlay": "Overlay.qml"
+  },
+  "barWidget": {
+    "displayName": "Shortcut Stories",
+    "description": "The stories assigned to you, with a panel to write a new one",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "barLabel": "count",
+      "defaultMode": "compose",
+      "defaultType": "feature",
+      "refreshMinutes": 5,
+      "defaultOwner": "me"
+    },
+    "schema": [
+      {
+        "key": "defaultTeam",
+        "type": "string",
+        "label": "Team a new story starts on (a team name, or empty for none)",
+        "defaultValue": ""
+      },
+      {
+        "key": "defaultIteration",
+        "type": "string",
+        "label": "Iteration a new story starts in ('current', an iteration id, or empty)",
+        "defaultValue": ""
+      },
+      {
+        "key": "defaultOwner",
+        "type": "string",
+        "label": "Owner a new story starts with ('me', a member id, or empty)",
+        "defaultValue": "me"
+      },
+      {
+        "key": "defaultType",
+        "type": "enum",
+        "label": "Type a new story starts as",
+        "options": [
+          "feature",
+          "bug",
+          "chore"
+        ],
+        "defaultValue": "feature"
+      },
+      {
+        "key": "stickyFields",
+        "type": "enum",
+        "label": "Keep team and iteration after filing a story",
+        "options": [
+          "on",
+          "off"
+        ],
+        "defaultValue": "on"
+      },
+      {
+        "key": "barLabel",
+        "type": "enum",
+        "label": "Next to the glyph in the bar",
+        "options": [
+          "none",
+          "count",
+          "started"
+        ],
+        "defaultValue": "count"
+      },
+      {
+        "key": "defaultMode",
+        "type": "enum",
+        "label": "What the panel opens on",
+        "options": [
+          "compose",
+          "mine"
+        ],
+        "defaultValue": "compose"
+      },
+      {
+        "key": "showDone",
+        "type": "enum",
+        "label": "Show finished stories in the list",
+        "options": [
+          "on",
+          "off"
+        ],
+        "defaultValue": "off"
+      },
+      {
+        "key": "refreshMinutes",
+        "type": "integer",
+        "label": "Refresh interval while closed (minutes)",
+        "min": 1,
+        "max": 60,
+        "step": 1,
+        "defaultValue": 5
+      },
+      {
+        "key": "demo",
+        "type": "enum",
+        "label": "Show a made-up workspace and never call Shortcut",
+        "options": [
+          "off",
+          "on"
+        ],
+        "defaultValue": "off"
+      }
+    ]
+  }
+}

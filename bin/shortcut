@@ -1,0 +1,429 @@
+#!/bin/bash
+# Backend for the Shortcut Stories plugin. The shell never talks to Shortcut
+# itself: it runs this script and parses one JSON object, so everything that
+# touches the token lives in this one file and can be tried from a terminal.
+#
+#   shortcut login             store a Shortcut API token (keyring, else a 0600 file)
+#   shortcut logout            forget the stored token and the cached reference data
+#   shortcut refs [--force]    teams, workflows, members, iterations and you
+#   shortcut create            read one JSON object on stdin and file it as a story
+#   shortcut mine [--limit N]  the stories assigned to you that are not done
+#   shortcut move <id> <state> move a story to another workflow state
+#   shortcut show <id>         one story in full, description and tasks included
+#
+# refs, create, mine, move and show always print a single JSON object, {"ok": false,
+# "code": ..., "error": ...} on failure, so the panel has exactly one thing to
+# parse. login and logout print human lines instead: they run in a terminal,
+# where a JSON blob is no use to the person reading it.
+#
+# Environment: SHORTCUT_TOKEN overrides the stored token, SHORTCUT_API points at
+# another server, SHORTCUT_NO_KEYRING=1 skips the keyring, SHORTCUT_REFS_TTL sets
+# the reference cache lifetime in seconds, and SHORTCUT_DEMO=1 answers with a
+# made-up workspace and never calls Shortcut (the tests use all of them).
+
+set -uo pipefail
+
+API=${SHORTCUT_API:-https://api.app.shortcut.com/api/v3}
+CONFIG_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-shortcut-stories
+CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-shortcut-stories
+TOKEN_FILE=$CONFIG_DIR/token
+REFS_FILE=$CACHE_DIR/refs.json
+REFS_TTL=${SHORTCUT_REFS_TTL:-21600}
+
+# Stories that are not done. The four workflow state types are a fixed enum in
+# the API, so naming three of them here is not a list that can drift.
+OPEN_STATE_TYPES='["backlog","unstarted","started"]'
+
+WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
+TOKEN=""
+
+fail() {
+  jq -cn --arg error "$1" --arg code "${2:-error}" '{ok: false, code: $code, error: $error}'
+  exit 1
+}
+
+keyring() { [[ -z ${SHORTCUT_NO_KEYRING:-} ]] && command -v secret-tool >/dev/null; }
+
+load_token() {
+  if [[ -n ${SHORTCUT_TOKEN:-} ]]; then TOKEN=$SHORTCUT_TOKEN; return; fi
+  if keyring; then TOKEN=$(secret-tool lookup service shortcut 2>/dev/null); fi
+  if [[ -z $TOKEN && -r $TOKEN_FILE ]]; then TOKEN=$(tr -d '[:space:]' <"$TOKEN_FILE"); fi
+  [[ -n $TOKEN ]] || fail "No Shortcut token yet. Run: $0 login" notoken
+}
+
+# api METHOD PATH OUTFILE [BODYFILE] prints the HTTP status, 000 when
+# unreachable. The header goes through a process substitution so the token never
+# shows up in curl's argv (and so in ps). Response headers land in OUTFILE.head
+# so a 429 can be read for its Retry-After.
+api() {
+  curl -sS --max-time "${SHORTCUT_TIMEOUT:-20}" -X "$1" \
+    -H @<(printf 'Shortcut-Token: %s\n' "$TOKEN") \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json' \
+    ${4:+--data-binary @"$4"} \
+    -D "$3.head" -o "$3" -w '%{http_code}' "$API$2" 2>/dev/null
+  return 0
+}
+
+# The message Shortcut put in an error body, if it sent one. Validation failures
+# come back under .errors rather than .message.
+reason() {
+  jq -r '(.message // .error // null) as $m
+    | if $m then ($m | tostring)
+      elif (.errors | type) == "object" then (.errors | to_entries | map("\(.key): \(.value | tostring)") | join(", "))
+      elif (.errors | type) == "array" then (.errors | map(tostring) | join(", "))
+      else empty end' "$1" 2>/dev/null
+}
+
+retry_after() {
+  grep -i '^retry-after:' "$1.head" 2>/dev/null | head -1 | tr -dc '0-9'
+}
+
+check_status() {
+  local status=$1 body=$2 what=$3
+  case $status in
+    2*) return 0 ;;
+    401|403) fail "Shortcut rejected the token" auth ;;
+    000) fail "Shortcut is unreachable" network ;;
+    429)
+      local after; after=$(retry_after "$body")
+      fail "Shortcut is rate limiting${after:+; retry in ${after}s}" ratelimit
+      ;;
+  esac
+  local why; why=$(reason "$body")
+  fail "$what failed (HTTP $status)${why:+: $why}" http
+}
+
+# ---- reference data ------------------------------------------------------
+
+now() { date +%s; }
+
+cache_age() {
+  [[ -s $REFS_FILE ]] || { echo -1; return; }
+  local stamp; stamp=$(jq -r '.fetchedAt // 0' "$REFS_FILE" 2>/dev/null)
+  [[ $stamp =~ ^[0-9]+$ ]] || { echo -1; return; }
+  echo $(( $(now) - stamp ))
+}
+
+demo_refs() {
+  jq -cn --argjson now "$(now)" '{
+    ok: true, fetchedAt: $now, stale: false, partial: [],
+    me: {id: "demo-me", name: "Demo User", mentionName: "demo"},
+    groups: [
+      {id: "demo-team-1", name: "Platform", defaultWorkflowId: 500, workflowIds: [500]},
+      {id: "demo-team-2", name: "Design", defaultWorkflowId: 501, workflowIds: [501]}
+    ],
+    workflows: [
+      {id: 500, name: "Engineering", defaultStateId: 5002, states: [
+        {id: 5001, name: "Backlog", type: "backlog", position: 0},
+        {id: 5002, name: "Ready for Dev", type: "unstarted", position: 1},
+        {id: 5003, name: "In Progress", type: "started", position: 2},
+        {id: 5004, name: "Done", type: "done", position: 3}]},
+      {id: 501, name: "Design", defaultStateId: 5012, states: [
+        {id: 5011, name: "Icebox", type: "backlog", position: 0},
+        {id: 5012, name: "To Design", type: "unstarted", position: 1},
+        {id: 5013, name: "Shipped", type: "done", position: 2}]}
+    ],
+    members: [
+      {id: "demo-me", name: "Demo User", mentionName: "demo"},
+      {id: "demo-ada", name: "Ada Lovelace", mentionName: "ada"}
+    ],
+    iterations: [
+      {id: 42, name: "Sprint 12", status: "started", startDate: "2026-09-14", endDate: "2026-09-28", groupIds: ["demo-team-1"]},
+      {id: 43, name: "Sprint 13", status: "unstarted", startDate: "2026-09-28", endDate: "2026-10-12", groupIds: ["demo-team-1"]}
+    ]
+  }'
+}
+
+# Merge the five responses into the one shape the panel reads. Names are
+# camelCase here so Model.js never has to reshape what it is handed.
+merge_refs() {
+  jq -cn \
+    --argjson now "$(now)" \
+    --argjson partial "$1" \
+    --slurpfile me "$WORK/member" \
+    --slurpfile groups "$WORK/groups" \
+    --slurpfile workflows "$WORK/workflows" \
+    --argjson members "$2" \
+    --argjson iterations "$3" \
+    '{
+      ok: true, fetchedAt: $now, stale: false, partial: $partial,
+      me: ($me[0] | {id: .id, name: .name, mentionName: .mention_name}),
+      groups: ($groups[0] // [] | map(select(.archived != true))
+        | map({id: .id, name: .name,
+               defaultWorkflowId: .default_workflow_id,
+               workflowIds: (.workflow_ids // [])})),
+      workflows: ($workflows[0] // []
+        | map({id: .id, name: .name, defaultStateId: .default_state_id,
+               states: ((.states // []) | sort_by(.position)
+                 | map({id: .id, name: .name, type: .type, position: .position}))})),
+      members: ($members | map(select(.disabled != true))
+        | map({id: .id, name: (.profile.name // .profile.mention_name // "Unknown"),
+               mentionName: (.profile.mention_name // "")})),
+      iterations: ($iterations | map(select(.status != "done"))
+        | map({id: .id, name: .name, status: .status,
+               startDate: .start_date, endDate: .end_date,
+               groupIds: (.group_ids // [])}))
+    }'
+}
+
+# A cached answer, marked stale, for when a refresh could not reach Shortcut.
+# Reference data that is six hours old still fills the pickers; an empty panel
+# does not.
+serve_stale() {
+  [[ -s $REFS_FILE ]] || return 1
+  jq -c --arg why "$1" '. + {stale: true, staleReason: $why}' "$REFS_FILE" 2>/dev/null
+}
+
+cmd_refs() {
+  local force=0
+  [[ ${1:-} == "--force" ]] && force=1
+
+  if [[ -n ${SHORTCUT_DEMO:-} ]]; then demo_refs; return; fi
+
+  if (( !force )); then
+    local age; age=$(cache_age)
+    if (( age >= 0 && age < REFS_TTL )); then jq -c . "$REFS_FILE"; return; fi
+  fi
+
+  load_token
+
+  api GET "/member" "$WORK/member" >"$WORK/member.code" &
+  api GET "/groups" "$WORK/groups" >"$WORK/groups.code" &
+  api GET "/workflows" "$WORK/workflows" >"$WORK/workflows.code" &
+  api GET "/members" "$WORK/members" >"$WORK/members.code" &
+  api GET "/iterations" "$WORK/iterations" >"$WORK/iterations.code" &
+  wait
+
+  # /member, /groups and /workflows decide whether a story can be filed at all,
+  # so a failure there is a failure. But a cached answer beats an error page.
+  local part
+  for part in member groups workflows; do
+    local status; status=$(<"$WORK/$part.code")
+    [[ $status == 2* ]] && continue
+    if [[ $status == 000 ]] && serve_stale "Shortcut is unreachable"; then return; fi
+    check_status "$status" "$WORK/$part" "Reading ${part/member/your account}"
+  done
+
+  # /members and /iterations only fill pickers. Losing one costs you the owner
+  # dropdown, not the ability to write a story, so it is noted and not fatal.
+  local partial="[]" members="[]" iterations="[]"
+  if [[ $(<"$WORK/members.code") == 2* ]] && jq -e 'type == "array"' "$WORK/members" >/dev/null 2>&1; then
+    members=$(jq -c . "$WORK/members")
+  else
+    partial=$(jq -c '. + ["members"]' <<<"$partial")
+  fi
+  if [[ $(<"$WORK/iterations.code") == 2* ]] && jq -e 'type == "array"' "$WORK/iterations" >/dev/null 2>&1; then
+    iterations=$(jq -c . "$WORK/iterations")
+  else
+    partial=$(jq -c '. + ["iterations"]' <<<"$partial")
+  fi
+
+  jq -e 'type == "object" and has("id")' "$WORK/member" >/dev/null 2>&1 ||
+    fail "Shortcut sent an unreadable account" http
+
+  local merged; merged=$(merge_refs "$partial" "$members" "$iterations") ||
+    fail "Shortcut sent reference data that could not be read" http
+
+  mkdir -p "$CACHE_DIR"
+  printf '%s\n' "$merged" >"$CACHE_DIR/refs.json.tmp" && mv "$CACHE_DIR/refs.json.tmp" "$REFS_FILE"
+  printf '%s\n' "$merged"
+}
+
+# ---- stories -------------------------------------------------------------
+
+# create reads a JSON object on stdin rather than taking flags, because a
+# description is multiline and full of quotes, backticks and $ — as argv it
+# would survive QML but not the tests, which drive this script from bash.
+# The keys are a whitelist, not a pass-through: a key QML spells wrong fails
+# here, where a test can catch it, instead of being dropped silently by the API.
+cmd_create() {
+  local input; input=$(cat)
+  jq -e 'type == "object" and (.name | type) == "string" and ((.name | gsub("^\\s+|\\s+$"; "")) | length) > 0' \
+    <<<"$input" >/dev/null 2>&1 || fail "create needs a JSON object with a name" usage
+
+  if [[ -n ${SHORTCUT_DEMO:-} ]]; then
+    jq -cn --slurpfile in <(printf '%s' "$input") '{ok: true, story: {
+      id: 9999, name: ($in[0].name | gsub("^\\s+|\\s+$"; "")),
+      storyType: ($in[0].storyType // "feature"),
+      appUrl: "https://app.shortcut.com/demo/story/9999"}}'
+    return
+  fi
+
+  jq -c '
+    {name: (.name | gsub("^\\s+|\\s+$"; ""))}
+    + (if (.description // "") != "" then {description: (.description | gsub("\\s+$"; ""))} else {} end)
+    + (if (.storyType // "") != "" then {story_type: .storyType} else {} end)
+    + (if (.groupId // "") != "" then {group_id: .groupId} else {} end)
+    + (if .workflowStateId != null then {workflow_state_id: .workflowStateId} else {} end)
+    + (if .iterationId != null then {iteration_id: .iterationId} else {} end)
+    + (if (.ownerId // "") != "" then {owner_ids: [.ownerId]} else {} end)
+  ' <<<"$input" >"$WORK/body.json" || fail "create could not build a story" usage
+
+  load_token
+  local status; status=$(api POST "/stories" "$WORK/created" "$WORK/body.json")
+  check_status "$status" "$WORK/created" "Creating the story"
+
+  jq -c '{ok: true, story: {
+    id: .id, name: .name, storyType: .story_type,
+    appUrl: .app_url, workflowStateId: .workflow_state_id,
+    groupId: .group_id, iterationId: .iteration_id,
+    updatedAt: .updated_at}}' "$WORK/created" ||
+    fail "Shortcut sent an unreadable story" http
+}
+
+story_summary='{
+  id: .id, name: .name, storyType: .story_type,
+  appUrl: .app_url, workflowStateId: .workflow_state_id,
+  groupId: .group_id, iterationId: .iteration_id,
+  ownerIds: (.owner_ids // []), updatedAt: .updated_at
+}'
+
+# The structured query endpoint, not the search-operator one: it takes your
+# member UUID and the fixed state-type enum, so nothing here can be broken by a
+# mention name with a dot in it or by a change to the operator grammar.
+cmd_mine() {
+  local limit=50
+  if [[ ${1:-} == "--limit" ]]; then
+    limit=${2:-50}
+    [[ $limit =~ ^[0-9]+$ ]] || fail "--limit needs a number" usage
+  fi
+
+  if [[ -n ${SHORTCUT_DEMO:-} ]]; then
+    jq -cn --argjson now "$(now)" '{ok: true, fetchedAt: $now, total: 2, stories: [
+      {id: 1234, name: "Fix the thing", storyType: "bug", appUrl: "https://app.shortcut.com/demo/story/1234",
+       workflowStateId: 5003, groupId: "demo-team-1", iterationId: 42, ownerIds: ["demo-me"], updatedAt: "2026-09-21T09:00:00Z"},
+      {id: 1235, name: "Write the other thing", storyType: "feature", appUrl: "https://app.shortcut.com/demo/story/1235",
+       workflowStateId: 5002, groupId: "demo-team-1", iterationId: 42, ownerIds: ["demo-me"], updatedAt: "2026-09-20T15:30:00Z"}]}'
+    return
+  fi
+
+  load_token
+
+  local status; status=$(api GET "/member" "$WORK/member")
+  check_status "$status" "$WORK/member" "Reading your account"
+  local me; me=$(jq -r '.id // empty' "$WORK/member")
+  [[ -n $me ]] || fail "Shortcut did not say who you are" http
+
+  jq -cn --arg owner "$me" --argjson types "$OPEN_STATE_TYPES" \
+    '{owner_id: $owner, workflow_state_types: $types, archived: false}' >"$WORK/query.json"
+
+  status=$(api POST "/stories/search" "$WORK/mine" "$WORK/query.json")
+  check_status "$status" "$WORK/mine" "Searching your stories"
+
+  jq -c --argjson now "$(now)" --argjson limit "$limit" \
+    "(if type == \"array\" then . else (.data // []) end) as \$all
+     | {ok: true, fetchedAt: \$now, total: (\$all | length),
+        stories: (\$all | sort_by(.updated_at) | reverse | .[0:\$limit] | map($story_summary))}" \
+    "$WORK/mine" || fail "Shortcut sent stories that could not be read" http
+}
+
+# The list only carries what a row needs. Opening a story asks for the rest --
+# description, tasks, labels, deadline -- because fetching all of that for
+# every story in the list would be a lot of bytes nobody reads.
+cmd_show() {
+  local story=${1:-}
+  [[ $story =~ ^[0-9]+$ ]] || fail "show needs a story id" usage
+
+  if [[ -n ${SHORTCUT_DEMO:-} ]]; then
+    jq -cn --argjson id "$story" '{ok: true, story: {
+      id: $id, name: "Fix the thing", storyType: "bug",
+      appUrl: "https://app.shortcut.com/demo/story/\($id)",
+      description: "The button does nothing on the second click.\n\n## Steps\n\n1. Open the page\n2. Click once -- fine\n3. Click again -- nothing\n\nProbably the handler is being detached after the first run.",
+      workflowStateId: 5003, groupId: "demo-team-1", iterationId: 42,
+      epicId: null, estimate: 2, deadline: null,
+      ownerIds: ["demo-me"], requestedById: "demo-ada",
+      labels: ["regression", "frontend"],
+      tasks: [{id: 1, description: "Reproduce it", complete: true},
+              {id: 2, description: "Write a test", complete: false}],
+      commentCount: 3,
+      createdAt: "2026-09-18T09:00:00Z", updatedAt: "2026-09-21T09:00:00Z"}}'
+    return
+  fi
+
+  load_token
+  local status; status=$(api GET "/stories/$story" "$WORK/story")
+  check_status "$status" "$WORK/story" "Reading the story"
+
+  jq -c '{ok: true, story: {
+    id: .id, name: .name, storyType: .story_type,
+    appUrl: .app_url, description: (.description // ""),
+    workflowStateId: .workflow_state_id, groupId: .group_id,
+    iterationId: .iteration_id, epicId: .epic_id,
+    estimate: .estimate, deadline: .deadline,
+    ownerIds: (.owner_ids // []), requestedById: .requested_by_id,
+    labels: ((.labels // []) | map(.name)),
+    tasks: ((.tasks // []) | sort_by(.position)
+      | map({id: .id, description: .description, complete: .complete})),
+    commentCount: ((.comments // []) | map(select(.deleted != true)) | length),
+    createdAt: .created_at, updatedAt: .updated_at}}' "$WORK/story" ||
+    fail "Shortcut sent a story that could not be read" http
+}
+
+cmd_move() {
+  local story=${1:-} state=${2:-}
+  [[ $story =~ ^[0-9]+$ ]] || fail "move needs a story id" usage
+  [[ $state =~ ^[0-9]+$ ]] || fail "move needs a workflow state id" usage
+
+  if [[ -n ${SHORTCUT_DEMO:-} ]]; then
+    jq -cn --argjson id "$story" --argjson state "$state" \
+      '{ok: true, story: {id: $id, workflowStateId: $state}}'
+    return
+  fi
+
+  load_token
+  jq -cn --argjson state "$state" '{workflow_state_id: $state}' >"$WORK/move.json"
+  local status; status=$(api PUT "/stories/$story" "$WORK/moved" "$WORK/move.json")
+  check_status "$status" "$WORK/moved" "Moving the story"
+
+  jq -c "{ok: true, story: $story_summary}" "$WORK/moved" ||
+    fail "Shortcut sent an unreadable story" http
+}
+
+# ---- token ---------------------------------------------------------------
+
+cmd_login() {
+  local token
+  if [[ -t 0 ]]; then
+    echo "Create a token at https://app.shortcut.com/settings/account/api-tokens"
+    read -rsp "Shortcut API token: " token
+    echo
+  else
+    read -r token
+  fi
+  token=${token//[[:space:]]/}
+  [[ -n $token ]] || { echo "No token given." >&2; exit 1; }
+
+  # Try the token before storing it, so a typo fails here and not in the bar.
+  TOKEN=$token
+  local status; status=$(api GET "/member" "$WORK/member")
+  [[ $status == 2* ]] || { echo "Shortcut rejected that token (HTTP $status)." >&2; exit 1; }
+
+  rm -f "$REFS_FILE"
+  if keyring && printf '%s' "$token" | secret-tool store --label="Shortcut API token" service shortcut 2>/dev/null; then
+    rm -f "$TOKEN_FILE"
+    echo "Token saved to your keyring."
+  else
+    mkdir -p "$CONFIG_DIR"
+    (umask 077; printf '%s\n' "$token" >"$TOKEN_FILE")
+    echo "Token saved to $TOKEN_FILE."
+  fi
+  jq -r '"Signed in as \(.name) (@\(.mention_name))."' "$WORK/member" 2>/dev/null || true
+}
+
+cmd_logout() {
+  if keyring; then secret-tool clear service shortcut 2>/dev/null; fi
+  rm -f "$TOKEN_FILE" "$REFS_FILE"
+  echo "Forgot the Shortcut token."
+}
+
+case ${1:-} in
+  refs) shift; cmd_refs "$@" ;;
+  create) cmd_create ;;
+  mine) shift; cmd_mine "$@" ;;
+  move) shift; cmd_move "$@" ;;
+  show) shift; cmd_show "$@" ;;
+  login) cmd_login ;;
+  logout) cmd_logout ;;
+  *) sed -n '2,/^$/{s/^# \{0,1\}//;p}' "$0"; exit 2 ;;
+esac
