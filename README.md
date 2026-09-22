@@ -48,6 +48,11 @@ To put the count in the bar as well:
 omarchy bar put io.github.kimm-stensborg.shortcut-stories --section right
 ```
 
+The icon carries a small badge when a story has been assigned to you since
+you last opened it. Opening the story clears that one. The stories already
+assigned the first time the plugin looks are not new, so the badge starts
+clear. Hovering the icon does not list them.
+
 ### Your token
 
 The panel is locked until it has one. The first time you open it there is no
@@ -98,10 +103,15 @@ Then delete the `-- Shortcut Stories overlay` block from
 | `Ctrl + Tab` | Swaps between those two. |
 | `Ctrl + ,` | Settings. |
 | `Ctrl + R` | Re-read your workspace and your stories. |
+| `Alt + I` | In the list, only the sprint today falls inside. Again shows everything. |
 | `Esc` | Closes a dropdown, then gives a field back its focus, then closes the panel. |
 
 In **My stories**: `↑` `↓` walk the list, `Enter` (or a click) opens the story,
-and `Ctrl + O` opens it in your browser.
+and `Ctrl + O` opens it in your browser. **All** and the current sprint sit
+above the list. `Alt + I`, or a click, switches between them. The sprint is
+whichever one today falls inside. Where more than one does, the list shows
+all of them, and the button says so. A story with no sprint is not in that
+list. The choice is remembered.
 
 In an **open story**: `←` `→` pick a state and `Enter` moves it there,
 `Ctrl + O` opens it in your browser, and `Esc` goes back to the list.
@@ -130,18 +140,29 @@ filing**.
 
 A row in the list is a glance -- reference, name, state. `Enter` or a click
 opens the story itself: who it is for, which sprint, the estimate, the
-deadline, its labels and its tasks, and under all of that the description,
-rendered rather than left as markdown source. That is the part you need in
-front of you to actually do the work, and it is why the list does not try to
-show it.
+deadline and its labels, and under all of that the description, the tasks
+and the comments. The description and the comments are rendered rather than
+left as markdown source. That is the part you need in front of you to
+actually do the work, and it is why the list does not try to show it.
 
 The description runs the full width of the card rather than sharing it with
 the facts, because it is prose and a narrow column of prose is harder to read.
 It wraps mid-word where it has to, so a pasted URL stays inside the card.
+The line breaks it was written with stay line breaks: markdown would otherwise
+fold them into one paragraph. A blank line stays a paragraph, and a list or a
+heading stays its own block. A comment is wrapped the same way.
+Comments do the same, oldest first, with who wrote each one and when. A reply
+is indented. A comment Shortcut has deleted is left out, and so is one with
+no text left. A comment marked as a blocker says so on its byline.
+
+Tasks sit between the description and the comments, each one marked done or
+still open. A story with neither says so, rather than leaving a gap you would
+otherwise go to Shortcut to check.
 
 The list carries only what a row needs. Opening a story fetches the rest,
-because pulling every description for every story would be a lot of bytes
-nobody reads.
+because pulling every description, task and comment for every story would be
+a lot of bytes nobody reads. Comments come back on that same story; there is
+no second request.
 
 ## Moving a story
 
@@ -184,6 +205,7 @@ rather than going stale when this one ends.
 | Next to the glyph | Open stories | What the bar shows: nothing, the count, or how many are in progress |
 | Opens on | New story | Which pane the keybinding lands on |
 | Show finished stories | off | Keeps done stories in the list |
+| Stories | Everything assigned to me | The list, or only the sprint today falls inside |
 | Refresh while closed | 5 min | How often the count is brought up to date |
 | Demo workspace | off | A made-up workspace; never calls Shortcut |
 
@@ -193,7 +215,8 @@ rather than going stale when this one ends.
 |------|------|
 | keyring, service `shortcut` | Your API token, or `~/.config/omarchy-shortcut-stories/token` at `0600` without a keyring |
 | `~/.cache/omarchy-shortcut-stories/refs.json` | Teams, workflows, people and iterations, so the pickers are filled before you open the panel |
-| `~/.cache/omarchy-shortcut-stories/status.json` | The count and the top few stories, for the bar widget to read |
+| `~/.cache/omarchy-shortcut-stories/status.json` | The count and how many stories you have not opened, for the bar widget to read |
+| `~/.cache/omarchy-shortcut-stories/seen.json` | The stories you have opened, so the badge only counts new ones |
 | `~/.config/omarchy/shell.json` | The settings above, on the widget's entry. Team is stored as its id, so renaming a team in Shortcut does not unset it; a team name typed by hand still works. |
 
 The reference cache is re-read every six hours, and whenever the panel opens
@@ -242,9 +265,9 @@ newlines and `$` in it survives.
 | `Overlay.qml` | The card, the mode switch and the key handling |
 | `ComposePane.qml` | The new-story form |
 | `StoriesPane.qml` | The stories assigned to you |
-| `StoryDetail.qml` | One story opened up, and the states it can move to |
+| `StoryDetail.qml` | One story opened up: description, tasks, comments, and the states it can move to |
 | `SettingsPane.qml`, `SettingsColumn.qml` | The settings page |
-| `BarWidget.qml` | The glyph and the count |
+| `BarWidget.qml` | The glyph, the count, and the badge for stories you have not opened |
 | `install.sh` | Enables the plugin and binds a key |
 | `test.sh` | Mock-API tests, `Model.js` under node, and `qmllint` |
 

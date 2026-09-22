@@ -48,6 +48,8 @@ Item {
   readonly property string defaultIteration: Model.readSetting(settings, "defaultIteration")
   readonly property string defaultOwner: Model.readSetting(settings, "defaultOwner")
   readonly property bool showDone: Model.readSetting(settings, "showDone")
+  readonly property string listScope: Model.readSetting(settings, "listScope")
+  readonly property string today: new Date().toISOString().slice(0, 10)
   readonly property string defaultMode: Model.readSetting(settings, "defaultMode")
   readonly property string defaultType: Model.readSetting(settings, "defaultType")
   readonly property string defaultTeam: Model.readSetting(settings, "defaultTeam")
@@ -279,7 +281,8 @@ Item {
                 bordered: root.mode === modelData.id
                 text: {
                   if (modelData.id !== "mine" || !root.store) return modelData.label
-                  var n = Model.openCount(root.store.stories, root.refs)
+                  var list = Model.storiesInScope(root.store.stories, root.refs, root.listScope, root.today)
+                  var n = Model.openCount(list, root.refs)
                   return n ? modelData.label + " · " + n : modelData.label
                 }
                 foreground: root.mode === modelData.id ? root.accent : root.muted
@@ -353,7 +356,7 @@ Item {
     if (root.mode === "mine" && root.storyOpen)
       return "← → pick a state · Enter moves it · Ctrl+O opens it · Esc back to the list"
     if (root.mode === "mine")
-      return "Enter opens a story · Ctrl+O in your browser · Ctrl+R refreshes · Alt+1 a new story · Esc closes"
+      return "Enter opens a story · Alt+I the current sprint · Ctrl+O in your browser · Esc closes"
     return "Ctrl+R refreshes · Alt+1 a new story · Esc closes"
   }
 

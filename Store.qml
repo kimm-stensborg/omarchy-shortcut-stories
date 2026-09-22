@@ -85,6 +85,11 @@ Item {
 
   property var refs: null           // teams, workflows, members, iterations, you
   property var stories: []          // raw story objects, newest first
+  property bool storiesKnown: false // a fetch has succeeded, so [] means none
+  property var seenIds: []          // story ids you have opened, still on the list
+  property bool seenReady: false
+  property bool seenBaseline: false // no seen file yet: the next list is not "new"
+  property string seenWritten: ""
   property var failure: null        // the last {code, error}, or null
   property bool loadingRefs: false
   property bool loadingStories: false
@@ -146,8 +151,10 @@ Item {
     root.loadingStories = false
     var parsed = parse(text)
     if (parsed && parsed.ok) {
+      root.storiesKnown = true
       root.stories = parsed.stories || []
       root.failure = null
+      root.publishStatus()
     } else if (parsed) {
       // A failed refresh keeps the last list up. A panel that empties itself
       // because the wifi dropped is worse than one showing slightly old rows.
@@ -171,7 +178,11 @@ Item {
     root.creating = false
     var parsed = parse(text)
     if (parsed && parsed.ok && parsed.story) {
-      root.stories = Model.prependCreated(root.stories, parsed.story)
+      var filed = Model.prependCreated(root.stories, parsed.story)
+      // You wrote it, so it is not news. Remember it before the list changes,
+      // or the badge would flash for a story you just filed.
+      root.remember(filed, [parsed.story.id])
+      root.stories = filed
       root.storyCreated(parsed.story)
       // Shortcut's search index trails a write by seconds, so the list is told
       // what happened rather than asked. The catch-up poll is only to pick up
@@ -226,6 +237,8 @@ Item {
       // not overwrite the one you are looking at now.
       if (parsed.story.id !== root.detailFor) return
       root.detail = parsed.story
+      root.remember(root.stories, [parsed.story.id])
+      root.publishStatus()
     } else {
       root.detailError = parsed && parsed.error ? parsed.error : "bin/shortcut gave no answer"
     }
@@ -270,22 +283,45 @@ Item {
   readonly property string statusPath: (Quickshell.env("XDG_CACHE_HOME")
     || Quickshell.env("HOME") + "/.cache") + "/omarchy-shortcut-stories/status.json"
 
+  // Seen ids live beside the status file. The bar cannot ask the service,
+  // so the count of stories you have not opened is written out with the rest.
+  readonly property string seenPath: (Quickshell.env("XDG_CACHE_HOME")
+    || Quickshell.env("HOME") + "/.cache") + "/omarchy-shortcut-stories/seen.json"
+
+  function writeSeen() {
+    var text = JSON.stringify({ ids: root.seenIds })
+    if (text === root.seenWritten) return
+    root.seenWritten = text
+    seenFile.setText(text)
+  }
+
+  // `readIds` are stories just opened or just filed. A missing seen file
+  // baselines instead: the list in front of you is not news.
+  function remember(stories, readIds) {
+    if (!root.seenReady) return
+    var next = root.seenBaseline
+      ? Model.seenIdsOf(stories)
+      : Model.noteSeen(root.seenIds, stories, readIds || [])
+    root.seenBaseline = false
+    if (Model.sameIds(next, root.seenIds)) return
+    root.seenIds = next
+    root.writeSeen()
+  }
+
   function publishStatus() {
     if (!root.configLoaded) return
+    var unseen = 0
+    if (root.seenReady && root.storiesKnown) {
+      root.remember(root.stories, [])
+      unseen = Model.unseenCount(root.stories, root.seenIds)
+    }
     var open = Model.openCount(root.stories, root.refs)
     var started = Model.startedCount(root.stories, root.refs)
-    var sections = Model.sectionStories(root.stories, root.refs, false)
-    var top = []
-    for (var a = 0; a < sections.length && top.length < 5; a++)
-      for (var b = 0; b < sections[a].stories.length && top.length < 5; b++) {
-        var story = sections[a].stories[b]
-        top.push({ ref: story.ref, stateName: story.stateName, name: story.name })
-      }
     var locked = !!(root.failure
       && (root.failure.code === "notoken" || root.failure.code === "auth"))
     statusFile.setText(JSON.stringify({
-      count: open, started: started, locked: locked,
-      stale: root.stale, top: top,
+      count: open, started: started, unseen: unseen, locked: locked,
+      stale: root.stale,
       error: root.failure && !locked ? String(root.failure.error) : ""
     }))
   }
@@ -299,6 +335,32 @@ Item {
     path: root.statusPath
     atomicWrites: true
     printErrors: false
+  }
+
+  FileView {
+    id: seenFile
+    path: root.seenPath
+    atomicWrites: true
+    printErrors: false
+    onLoaded: {
+      var parsed = root.parse(text())
+      if (!parsed || !Array.isArray(parsed.ids)) {
+        root.seenIds = []
+        root.seenBaseline = true
+      } else {
+        root.seenIds = parsed.ids
+        root.seenBaseline = false
+        root.seenWritten = JSON.stringify({ ids: parsed.ids })
+      }
+      root.seenReady = true
+      root.publishStatus()
+    }
+    onLoadFailed: {
+      root.seenIds = []
+      root.seenBaseline = true
+      root.seenReady = true
+      root.publishStatus()
+    }
   }
 
   // ---- The token.
@@ -400,6 +462,10 @@ Item {
   // answer from before the switch is not an answer to the question now.
   onDemoChanged: {
     if (!root.configLoaded) return
+    // Demo stories are not your stories. The next real list is a new baseline,
+    // not a pile of badges for things you already had.
+    root.storiesKnown = false
+    root.seenBaseline = true
     root.refs = null
     root.stories = []
     root.refreshRefs(true)

@@ -6,8 +6,9 @@ import qs.Ui
 import "Model.js" as Model
 
 // One story, opened up: what it is called, everything the list had no room
-// for, and the description itself, which is the part you actually need in
-// front of you to do the work.
+// for, and then the description, the tasks and the comments. That is the
+// part you actually need in front of you to do the work, which is why none
+// of it is fetched until the story is opened.
 //
 // Everything reads down one column. The description sits under the facts
 // rather than beside them because it is prose: a half-width column of it is
@@ -232,6 +233,9 @@ Item {
             textFormat: body.hasDescription ? Text.MarkdownText : Text.PlainText
             text: body.hasDescription ? view.detail.description : "No description."
             color: body.hasDescription ? view.foreground : view.muted
+            linkColor: view.accent
+            lineHeight: 1.35
+            lineHeightMode: Text.ProportionalHeight
             font.family: view.fontFamily
             font.pixelSize: Style.font.body
             onLinkActivated: function(link) {
@@ -239,12 +243,28 @@ Item {
             }
           }
 
-          // ---- Tasks.
+          PanelSeparator { Layout.fillWidth: true }
+
+          // ---- Tasks. Listed in full, not only counted in the facts above,
+          // so a story can be worked without opening it in the browser.
           ColumnLayout {
             Layout.fillWidth: true
-            Layout.topMargin: Style.spacing.sm
-            visible: view.detail && view.detail.tasks.length > 0
             spacing: Style.spacing.xs
+
+            Text {
+              text: "Tasks"
+              color: view.muted
+              font.family: view.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              visible: !view.detail || view.detail.tasks.length === 0
+              text: "No tasks."
+              color: view.muted
+              font.family: view.fontFamily
+              font.pixelSize: Style.font.body
+            }
 
             Repeater {
               model: view.detail ? view.detail.tasks : []
@@ -268,6 +288,69 @@ Item {
                   color: modelData.complete ? view.muted : view.foreground
                   font.family: view.fontFamily
                   font.pixelSize: Style.font.caption
+                }
+              }
+            }
+          }
+
+          PanelSeparator { Layout.fillWidth: true }
+
+          // ---- Comments, oldest first. A reply is indented; the thread is
+          // not rebuilt, because position order is already the reading order.
+          ColumnLayout {
+            Layout.fillWidth: true
+            spacing: Style.spacing.md
+
+            Text {
+              text: "Comments"
+              color: view.muted
+              font.family: view.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              visible: !view.detail || view.detail.comments.length === 0
+              text: "No comments."
+              color: view.muted
+              font.family: view.fontFamily
+              font.pixelSize: Style.font.body
+            }
+
+            Repeater {
+              model: view.detail ? view.detail.comments : []
+              delegate: ColumnLayout {
+                required property var modelData
+                Layout.fillWidth: true
+                Layout.leftMargin: modelData.reply ? Style.space(24) : 0
+                spacing: Style.spacing.xs
+
+                readonly property string when: Model.relativeTime(modelData.createdAt, Math.round(Date.now() / 1000))
+
+                Text {
+                  Layout.fillWidth: true
+                  wrapMode: Text.Wrap
+                  text: parent.modelData.authorName
+                    + (parent.when !== "" ? "  ·  " + parent.when : "")
+                    + (parent.modelData.blocker ? "  ·  blocker" : "")
+                  color: parent.modelData.blocker ? view.urgent : view.muted
+                  font.family: view.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Text {
+                  Layout.fillWidth: true
+                  wrapMode: Text.Wrap
+                  textFormat: Text.MarkdownText
+                  text: parent.modelData.text
+                  color: view.foreground
+                  linkColor: view.accent
+                  lineHeight: 1.35
+                  lineHeightMode: Text.ProportionalHeight
+                  font.family: view.fontFamily
+                  font.pixelSize: Style.font.body
+                  onLinkActivated: function(link) {
+                    Quickshell.execDetached(["omarchy-launch-browser", link])
+                  }
                 }
               }
             }

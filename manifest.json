@@ -102,6 +102,16 @@
         "defaultValue": "off"
       },
       {
+        "key": "listScope",
+        "type": "enum",
+        "label": "Which stories the list shows",
+        "options": [
+          "all",
+          "current"
+        ],
+        "defaultValue": "all"
+      },
+      {
         "key": "refreshMinutes",
         "type": "integer",
         "label": "Refresh interval while closed (minutes)",

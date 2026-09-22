@@ -106,7 +106,12 @@ cat >"$WORK/routes.json" <<'JSON'
     "labels": [{"id": 1, "name": "regression"}, {"id": 2, "name": "frontend"}],
     "tasks": [{"id": 2, "description": "Second", "complete": false, "position": 1},
               {"id": 1, "description": "First", "complete": true, "position": 0}],
-    "comments": [{"id": 1, "deleted": false}, {"id": 2, "deleted": true}, {"id": 3, "deleted": false}],
+    "comments": [
+      {"id": 3, "deleted": false, "author_id": "ada-uuid", "text": "On it", "created_at": "2026-09-20T11:00:00Z", "position": 2, "parent_id": 1, "blocker": true},
+      {"id": 1, "deleted": false, "author_id": "me-uuid", "text": "Seen it too", "created_at": "2026-09-19T11:00:00Z", "position": 1, "parent_id": null},
+      {"id": 2, "deleted": true, "author_id": "me-uuid", "text": "Forget this", "position": 3},
+      {"id": 4, "deleted": false, "author_id": "me-uuid", "text": "   ", "position": 4}
+    ],
     "created_at": "2026-09-18T09:00:00Z", "updated_at": "2026-09-21T09:00:00Z"}],
   "PUT /api/v3/stories/1234": [200, {"id": 1234, "name": "Fix the thing", "story_type": "bug",
     "app_url": "https://app.shortcut.com/acme/story/1234", "workflow_state_id": 5004,
@@ -301,7 +306,12 @@ is "show succeeds"           "$(jq -r .ok <<<"$out")" "true"
 is "it brings the description" "$(jq -r .story.description <<<"$out")" "Body **text**"
 is "labels come back by name" "$(jq -c .story.labels <<<"$out")" '["regression","frontend"]'
 is "tasks are in order"      "$(jq -r '[.story.tasks[].description] | join(",")' <<<"$out")" "First,Second"
+is "comments are oldest first" "$(jq -r '[.story.comments[].text] | join(",")' <<<"$out")" "Seen it too,On it"
+is "a reply keeps its parent" "$(jq -r '.story.comments[1].parentId' <<<"$out")" "1"
+is "the author is kept"       "$(jq -r .story.comments[0].authorId <<<"$out")" "me-uuid"
+is "a blocker is marked"      "$(jq -r .story.comments[1].blocker <<<"$out")" "true"
 is "deleted comments do not count" "$(jq -r .story.commentCount <<<"$out")" "2"
+is "a blank comment is left out" "$(jq -r '.story.comments | length' <<<"$out")" "2"
 is "the estimate survives"   "$(jq -r .story.estimate <<<"$out")" "2"
 is "it asks for the one story" "$(log | grep -c 'GET /api/v3/stories/1234')" "1"
 
@@ -320,7 +330,8 @@ is "demo create works"             "$(jq -r .ok <<<"$out")" "true"
 is "and trims like the real one"   "$(jq -r .story.name <<<"$out")" "demo"
 SHORTCUT_DEMO=1 "$CLI" mine >/dev/null
 SHORTCUT_DEMO=1 "$CLI" move 1 2 >/dev/null
-SHORTCUT_DEMO=1 "$CLI" show 1234 >/dev/null
+out=$(SHORTCUT_DEMO=1 "$CLI" show 1234)
+is "demo show includes the comments" "$(jq -r '[.story.comments[].authorId] | join(",")' <<<"$out")" "demo-ada,demo-me"
 is "demo never calls Shortcut"     "$(log | wc -l)" "0"
 
 # ---- QML ------------------------------------------------------------------
@@ -545,6 +556,22 @@ cases.push(
   ["an empty list has no sections", M.sectionStories([], refs, true).length, 0],
   ["a story in no known state is still shown",
     M.sectionStories([{id: 9, name: "Z", workflowStateId: 7}], refs, false)[0].title, "Elsewhere"],
+  ["all keeps every story",
+    M.storiesInScope([{iterationId:42},{iterationId:43},{iterationId:null}], refs, "all", TODAY).length, 3],
+  ["current keeps sprints that contain today",
+    M.storiesInScope(
+      [{name:"in", iterationId:42},{name:"next", iterationId:43},{name:"none", iterationId:null},{name:"design", iterationId:44}],
+      refs, "current", TODAY).map(s => s.name).join(","),
+    "in,design"],
+  ["a string id still matches",
+    M.storiesInScope([{iterationId:"42"}], refs, "current", TODAY).length, 1],
+  ["no current sprint shows nothing",
+    M.storiesInScope([{iterationId:42}], refs, "current", "2027-01-01").length, 0],
+  ["an unknown scope is everything",
+    M.storiesInScope([{iterationId:43}], refs, "nope", TODAY).length, 1],
+  ["one current sprint is named", M.currentIterationLabel(refs, "2026-10-05"), "Sprint 13"],
+  ["several current sprints share a label", M.currentIterationLabel(refs, TODAY), "Current sprints"],
+  ["no current sprint has no label", M.currentIterationLabel(refs, "2027-01-01"), ""],
   ["a move does not touch the input",
     (() => { const before = JSON.stringify(stories); M.applyMove(stories, 1, 5004); return JSON.stringify(stories) === before })(), true],
   ["a move lands",            M.applyMove(stories, 1, 5004).find(s => s.id === 1).workflowStateId, 5004],
@@ -567,6 +594,19 @@ cases.push(
   ["started counts only those", M.barLabel(stories, refs, "started"), "1"],
   ["none is empty",           M.barLabel(stories, refs, "none"), ""],
   ["an empty list shows nothing", M.barLabel([], refs, "count"), ""],
+  ["nothing seen means all of them are new", M.unseenCount([{id:1},{id:2}], []), 2],
+  ["a seen story is not new", M.unseenCount([{id:1},{id:2}], ["1"]), 1],
+  ["a number and a string are the same story", M.unseenCount([{id:1}], [1]), 0],
+  ["a story with no id is not a badge", M.unseenCount([{name:"x"}], []), 0],
+  ["a new arrival stays unseen",
+    M.unseenCount([{id:1},{id:2}], M.noteSeen(["1"], [{id:1},{id:2}], [])), 1],
+  ["opening it clears it",
+    M.unseenCount([{id:1},{id:2}], M.noteSeen(["1"], [{id:1},{id:2}], [2])), 0],
+  ["a story that left is forgotten", M.noteSeen(["1","9"], [{id:1}], []).join(","), "1"],
+  ["the first list is the baseline", M.seenIdsOf([{id:7},{id:8}]).join(","), "7,8"],
+  ["an empty list baselines to nothing", M.seenIdsOf([]).length, 0],
+  ["the same ids agree in either order", M.sameIds(["2","1"], [1, "2"]), true],
+  ["a different id does not", M.sameIds(["1"], ["1","2"]), false],
 
   // settings
   ["every option has a kind", M.SETTINGS.every(s => s.rows.every(r => ["text","number","toggle","choice","multi","picker"].includes(r.kind))), true],
@@ -601,6 +641,34 @@ cases.push(
     M.storyDetail({id:1,tasks:[{complete:true},{complete:false},{complete:true}]}, refs).taskLabel, "2 of 3 done"],
   ["no tasks says nothing",
     M.storyDetail({id:1,tasks:[]}, refs).taskLabel, ""],
+  ["comments name their author",
+    M.storyDetail({id:1, comments:[{id:1, authorId:"ada-uuid", text:"Hello", createdAt:"2026-09-20T10:00:00Z", position:1}]}, refs).comments[0].authorName,
+    "Ada Lovelace"],
+  ["a departed author is named as such",
+    M.storyDetail({id:1, comments:[{id:1, authorId:"ghost", text:"Hello"}]}, refs).comments[0].authorName,
+    "Someone who has left"],
+  ["an unsigned comment stays someone",
+    M.storyDetail({id:1, comments:[{id:1, text:"Hello"}]}, refs).comments[0].authorName,
+    "Someone"],
+  ["comments run oldest first",
+    M.storyDetail({id:1, comments:[
+      {id:2, text:"Later", position:2, createdAt:"2026-09-21T00:00:00Z"},
+      {id:1, text:"Earlier", position:1, createdAt:"2026-09-20T00:00:00Z"}
+    ]}, refs).comments.map(c => c.text).join(","),
+    "Earlier,Later"],
+  ["a reply is marked",
+    M.storyDetail({id:1, comments:[{id:2, text:"Yep", parentId:1}]}, refs).comments[0].reply, true],
+  ["a top-level comment is not",
+    M.storyDetail({id:1, comments:[{id:1, text:"Yep", parentId:null}]}, refs).comments[0].reply, false],
+  ["a blocker is marked",
+    M.storyDetail({id:1, comments:[{id:1, text:"Stopped", blocker:true}]}, refs).comments[0].blocker, true],
+  ["a deleted comment is left out",
+    M.storyDetail({id:1, comments:[{id:1, text:"Gone", deleted:true},{id:2, text:"Kept"}]}, refs).comments.map(c => c.text).join(","),
+    "Kept"],
+  ["a blank comment is left out",
+    M.storyDetail({id:1, comments:[{id:1, text:"   "},{id:2, text:"Kept"}]}, refs).comments.length, 1],
+  ["no comments is an empty list",
+    M.storyDetail({id:1}, refs).comments.length, 0],
   ["one point is singular",
     M.storyDetail({id:1,estimate:1}, refs).estimateLabel, "1 point"],
   ["more are plural",
@@ -611,6 +679,18 @@ cases.push(
     M.storyDetail({id:1,deadline:"2026-10-01T00:00:00Z"}, refs).deadline, "2026-10-01"],
   ["a missing description is empty, not undefined",
     M.storyDetail({id:1}, refs).description, ""],
+  ["a description keeps its line breaks",
+    M.storyDetail({id:1, description:"one\ntwo"}, refs).description, "one  \ntwo"],
+  ["a blank line stays a paragraph", M.formatDescription("one\n\ntwo"), "one\n\ntwo"],
+  ["extra blank lines collapse", M.formatDescription("one\n\n\ntwo"), "one\n\ntwo"],
+  ["a blank description stays blank", M.formatDescription("  \n\t"), ""],
+  ["a list is not glued to the line before it",
+    M.formatDescription("See:\n1. one\n2. two"), "See:\n\n1. one\n2. two"],
+  ["prose after a list starts a new paragraph",
+    M.formatDescription("1. one\nThen this"), "1. one\n\nThen this"],
+  ["a fence is left as it was typed",
+    M.formatDescription("```\nkeep\nthis\n```"), "```\nkeep\nthis\n```"],
+  ["a heading stays a heading", M.formatDescription("## Steps\n\nDo it"), "## Steps\n\nDo it"],
   ["a detail still knows its state",
     M.storyDetail({id:1,workflowStateId:5003}, refs).stateName, "In Progress"],
   ["no story, no detail", M.storyDetail(null, refs), null],

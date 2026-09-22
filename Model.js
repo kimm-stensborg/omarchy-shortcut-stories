@@ -198,6 +198,68 @@ function storyGlyph(type) {
   return STORY_TYPES[0].glyph
 }
 
+// ---- description text.
+
+// What kind of markdown line this is. A list has to stay a list, and a run of
+// ordinary lines has to stay the lines the author typed.
+function descriptionLineKind(line) {
+  if (/^\s*$/.test(line)) return "blank"
+  if (/^\s{0,3}(\d+[.)]\s|[-*+]\s)/.test(line)) return "list"
+  if (/^\s{0,3}(#{1,6}\s|>\s?|[-*_]{3,}\s*$)/.test(line)) return "block"
+  return "prose"
+}
+
+// Shortcut stores the breaks the author typed. Markdown collapses a single
+// newline into a space, so a description written as lines comes out as one
+// paragraph. A run of ordinary lines becomes hard breaks. A blank line stays
+// a paragraph. A list or a heading starts its own block, and so does the
+// prose that follows one, so neither gets swallowed by the other. A fenced
+// block is copied as it was typed.
+function formatDescription(text) {
+  var src = str(text).replace(/\r\n/g, "\n").replace(/[ \t]+$/, "")
+  if (trim(src) === "") return ""
+  var lines = src.split("\n")
+  var out = []
+  var inFence = false
+  var prev = "start"
+
+  function pushBlank() {
+    if (prev === "blank" || prev === "start") return
+    out.push("")
+    prev = "blank"
+  }
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i]
+    if (/^\s{0,3}(```|~~~)/.test(line)) {
+      inFence = !inFence
+      if (prev !== "start" && prev !== "blank" && prev !== "fence") pushBlank()
+      out.push(line)
+      prev = "fence"
+      continue
+    }
+    if (inFence) {
+      out.push(line)
+      prev = "fence"
+      continue
+    }
+    var kind = descriptionLineKind(line)
+    if (kind === "blank") { pushBlank(); continue }
+    var cleaned = line.replace(/[ \t]+$/, "")
+    if (kind === "prose" && prev === "prose") {
+      out[out.length - 1] = out[out.length - 1].replace(/[ \t]+$/, "") + "  "
+      out.push(cleaned)
+      prev = "prose"
+      continue
+    }
+    if (prev !== "start" && prev !== "blank" && prev !== kind) pushBlank()
+    out.push(cleaned)
+    prev = kind
+  }
+  while (out.length && out[out.length - 1] === "") out.pop()
+  return out.join("\n")
+}
+
 // ---- the form.
 
 function emptyForm(defaults) {
@@ -305,6 +367,35 @@ function summarizeStory(story, refs) {
   }
 }
 
+// Comments, oldest first, so the thread reads in the order it was written.
+// A deleted comment, or one whose text is gone, is left out: there is nothing
+// to read. A reply stays in that order and is only marked, so the view can
+// indent it without rebuilding the thread.
+function storyComments(raw, refs) {
+  var list = ((raw && raw.comments) || []).filter(function(c) {
+    return c && c.deleted !== true && trim(c.text) !== ""
+  })
+  list.sort(function(a, b) {
+    var ap = a.position || 0, bp = b.position || 0
+    if (ap !== bp) return ap - bp
+    var ac = str(a.createdAt), bc = str(b.createdAt)
+    return ac < bc ? -1 : (ac > bc ? 1 : 0)
+  })
+  return list.map(function(c) {
+    var author = findMember(refs, c.authorId)
+    var parent = c.parentId
+    return {
+      id: c.id,
+      text: formatDescription(c.text),
+      authorName: author ? str(author.name)
+        : (str(c.authorId) === "" ? "Someone" : "Someone who has left"),
+      createdAt: str(c.createdAt),
+      reply: parent !== null && parent !== undefined && str(parent) !== "",
+      blocker: c.blocker === true
+    }
+  })
+}
+
 // One story opened up. Everything the panel shows is resolved here against the
 // reference cache, so the detail view is a layout and holds no lookups.
 function storyDetail(raw, refs) {
@@ -318,7 +409,7 @@ function storyDetail(raw, refs) {
   var tasks = raw.tasks || []
   var done = tasks.filter(function(t) { return t.complete === true }).length
 
-  base.description = str(raw.description)
+  base.description = formatDescription(raw.description)
   base.owners = owners
   base.ownerLabel = owners.length ? owners.join(", ") : "Unassigned"
   base.requesterName = requester ? str(requester.name) : ""
@@ -329,7 +420,8 @@ function storyDetail(raw, refs) {
   base.estimateLabel = base.estimate === null ? ""
     : (base.estimate === 1 ? "1 point" : base.estimate + " points")
   base.deadline = str(raw.deadline).slice(0, 10)
-  base.commentCount = raw.commentCount || 0
+  base.comments = storyComments(raw, refs)
+  base.commentCount = base.comments.length
   base.createdAt = str(raw.createdAt)
   return base
 }
@@ -355,6 +447,35 @@ function detailFacts(detail) {
 }
 
 var STATE_TYPE_ORDER = ["started", "unstarted", "backlog", "done"]
+
+// Iterations today falls inside. A workspace can have one per team, so "the
+// current sprint" is all of them, not a guess at which team you meant.
+function currentIterations(refs, todayIso) {
+  return ((refs && refs.iterations) || []).filter(function(it) {
+    return iterationIsCurrent(it, todayIso)
+  })
+}
+
+// The name on the filter. One sprint is named. Several share the label,
+// because the list is about to show all of them. None leaves it blank.
+function currentIterationLabel(refs, todayIso) {
+  var list = currentIterations(refs, todayIso)
+  if (!list.length) return ""
+  if (list.length === 1) return str(list[0].name)
+  return "Current sprints"
+}
+
+// "current" keeps stories whose sprint contains today. Anything else, including
+// a scope this version does not know, keeps the whole list.
+function storiesInScope(stories, refs, scope, todayIso) {
+  var list = stories || []
+  if (scope !== "current") return list
+  var ids = currentIterations(refs, todayIso).map(function(it) { return str(it.id) })
+  return list.filter(function(story) {
+    var id = str(story && story.iterationId)
+    return id !== "" && ids.indexOf(id) !== -1
+  })
+}
 
 // Grouped by what kind of state the story is in, because "what am I doing" and
 // "what is waiting" are the two questions this list answers.
@@ -444,7 +565,10 @@ var SETTINGS = [
   { title: "In the panel", rows: [
     { key: "defaultMode", kind: "choice", label: "Opens on", fallback: "compose",
       options: [{ value: "compose", label: "New story" }, { value: "mine", label: "My stories" }] },
-    { key: "showDone", kind: "toggle", label: "Show finished stories", fallback: false }
+    { key: "showDone", kind: "toggle", label: "Show finished stories", fallback: false },
+    { key: "listScope", kind: "choice", label: "Stories", fallback: "all",
+      options: [{ value: "all", label: "Everything assigned to me" },
+                { value: "current", label: "The current sprint" }] }
   ]},
   { title: "Data", rows: [
     { key: "refreshMinutes", kind: "number", label: "Refresh while closed (minutes)",
@@ -710,6 +834,81 @@ function startedCount(stories, refs) {
   }).length
 }
 
+function storyKey(story) {
+  if (!story || story.id === null || story.id === undefined) return ""
+  var id = String(story.id)
+  return id === "" ? "" : id
+}
+
+// Stories on the list that are not in the seen set. The bar's badge is this
+// count: assigned since you last opened them, not everything you own.
+function unseenStories(stories, seenIds) {
+  var known = {}
+  var seen = seenIds || []
+  for (var i = 0; i < seen.length; i++) known[String(seen[i])] = true
+  var out = []
+  var list = stories || []
+  for (var j = 0; j < list.length; j++) {
+    var id = storyKey(list[j])
+    if (id === "" || known[id]) continue
+    out.push(list[j])
+  }
+  return out
+}
+
+function unseenCount(stories, seenIds) {
+  return unseenStories(stories, seenIds).length
+}
+
+// The seen set, kept to stories still on the list. Ones that have left are
+// forgotten, so one that comes back reads as new. `readIds` are stories just
+// opened; they join the set only while they are still assigned to you.
+function noteSeen(seenIds, stories, readIds) {
+  var current = {}
+  var list = stories || []
+  for (var i = 0; i < list.length; i++) {
+    var id = storyKey(list[i])
+    if (id !== "") current[id] = true
+  }
+  var keep = {}
+  var seen = seenIds || []
+  for (var j = 0; j < seen.length; j++) {
+    var s = String(seen[j])
+    if (current[s]) keep[s] = true
+  }
+  var read = readIds || []
+  for (var k = 0; k < read.length; k++) {
+    var r = String(read[k])
+    if (r !== "" && current[r]) keep[r] = true
+  }
+  var out = []
+  for (var key in keep) out.push(key)
+  return out
+}
+
+// The first list the plugin ever sees. Everything already assigned is the
+// baseline, so the badge does not light up for stories you had before it
+// started watching.
+function seenIdsOf(stories) {
+  var ids = []
+  var list = stories || []
+  for (var i = 0; i < list.length; i++) {
+    var id = storyKey(list[i])
+    if (id !== "") ids.push(id)
+  }
+  return noteSeen([], list, ids)
+}
+
+function sameIds(a, b) {
+  var left = a || []
+  var right = b || []
+  if (left.length !== right.length) return false
+  var known = {}
+  for (var i = 0; i < left.length; i++) known[String(left[i])] = true
+  for (var j = 0; j < right.length; j++) if (!known[String(right[j])]) return false
+  return true
+}
+
 // What the bar shows next to the glyph.
 function barLabel(stories, refs, mode) {
   if (mode === "none") return ""
@@ -726,12 +925,17 @@ if (typeof module !== "undefined") {
     groupOptions: groupOptions, memberOptions: memberOptions,
     iterationOptions: iterationOptions, iterationIsCurrent: iterationIsCurrent,
     storyTypes: storyTypes, storyGlyph: storyGlyph,
+    formatDescription: formatDescription,
     emptyForm: emptyForm, validateForm: validateForm,
     buildCreateRequest: buildCreateRequest, draftIsDirty: draftIsDirty,
     clearForm: clearForm, destinationLabel: destinationLabel,
-    summarizeStory: summarizeStory, storyDetail: storyDetail,
+    summarizeStory: summarizeStory, storyComments: storyComments,
+    storyDetail: storyDetail,
     detailFacts: detailFacts, sectionStories: sectionStories,
-    sectionTitle: sectionTitle, applyMove: applyMove,
+    sectionTitle: sectionTitle,
+    currentIterations: currentIterations, currentIterationLabel: currentIterationLabel,
+    storiesInScope: storiesInScope,
+    applyMove: applyMove,
     prependCreated: prependCreated, relativeTime: relativeTime,
     SETTINGS: SETTINGS, settingRow: settingRow, choiceList: choiceList,
     coerceSetting: coerceSetting, readSetting: readSetting,
@@ -740,6 +944,8 @@ if (typeof module !== "undefined") {
     sectionWeight: sectionWeight, settingsColumns: settingsColumns,
     entryFor: entryFor, settingsSummary: settingsSummary, barLabel: barLabel,
     openCount: openCount, startedCount: startedCount,
+    storyKey: storyKey, unseenStories: unseenStories, unseenCount: unseenCount,
+    noteSeen: noteSeen, seenIdsOf: seenIdsOf, sameIds: sameIds,
     settingOptions: settingOptions, resolveTeamSetting: resolveTeamSetting,
     resolveOwnerSetting: resolveOwnerSetting, resolveIterationSetting: resolveIterationSetting
   }

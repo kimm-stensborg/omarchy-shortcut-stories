@@ -9,7 +9,7 @@
 #   shortcut create            read one JSON object on stdin and file it as a story
 #   shortcut mine [--limit N]  the stories assigned to you that are not done
 #   shortcut move <id> <state> move a story to another workflow state
-#   shortcut show <id>         one story in full, description and tasks included
+#   shortcut show <id>         one story in full: description, tasks and comments
 #
 # refs, create, mine, move and show always print a single JSON object, {"ok": false,
 # "code": ..., "error": ...} on failure, so the panel has exactly one thing to
@@ -319,8 +319,9 @@ cmd_mine() {
 }
 
 # The list only carries what a row needs. Opening a story asks for the rest --
-# description, tasks, labels, deadline -- because fetching all of that for
-# every story in the list would be a lot of bytes nobody reads.
+# description, tasks, comments, labels, deadline -- because fetching all of
+# that for every story in the list would be a lot of bytes nobody reads.
+# Comments ride on the story itself; there is no second request.
 cmd_show() {
   local story=${1:-}
   [[ $story =~ ^[0-9]+$ ]] || fail "show needs a story id" usage
@@ -336,7 +337,12 @@ cmd_show() {
       labels: ["regression", "frontend"],
       tasks: [{id: 1, description: "Reproduce it", complete: true},
               {id: 2, description: "Write a test", complete: false}],
-      commentCount: 3,
+      comments: [
+        {id: 1, authorId: "demo-ada", text: "I can reproduce this on the second click.",
+         createdAt: "2026-09-19T10:00:00Z", parentId: null, blocker: false, position: 1},
+        {id: 2, authorId: "demo-me", text: "The handler is detached after the first run.",
+         createdAt: "2026-09-21T09:30:00Z", parentId: 1, blocker: false, position: 2}],
+      commentCount: 2,
       createdAt: "2026-09-18T09:00:00Z", updatedAt: "2026-09-21T09:00:00Z"}}'
     return
   fi
@@ -345,18 +351,25 @@ cmd_show() {
   local status; status=$(api GET "/stories/$story" "$WORK/story")
   check_status "$status" "$WORK/story" "Reading the story"
 
-  jq -c '{ok: true, story: {
-    id: .id, name: .name, storyType: .story_type,
-    appUrl: .app_url, description: (.description // ""),
-    workflowStateId: .workflow_state_id, groupId: .group_id,
-    iterationId: .iteration_id, epicId: .epic_id,
-    estimate: .estimate, deadline: .deadline,
-    ownerIds: (.owner_ids // []), requestedById: .requested_by_id,
-    labels: ((.labels // []) | map(.name)),
-    tasks: ((.tasks // []) | sort_by(.position)
-      | map({id: .id, description: .description, complete: .complete})),
-    commentCount: ((.comments // []) | map(select(.deleted != true)) | length),
-    createdAt: .created_at, updatedAt: .updated_at}}' "$WORK/story" ||
+  jq -c '
+    ((.comments // [])
+      | map(select(.deleted != true and ((.text // "") | gsub("^\\s+|\\s+$"; "")) != ""))) as $comments
+    | {ok: true, story: {
+      id: .id, name: .name, storyType: .story_type,
+      appUrl: .app_url, description: (.description // ""),
+      workflowStateId: .workflow_state_id, groupId: .group_id,
+      iterationId: .iteration_id, epicId: .epic_id,
+      estimate: .estimate, deadline: .deadline,
+      ownerIds: (.owner_ids // []), requestedById: .requested_by_id,
+      labels: ((.labels // []) | map(.name)),
+      tasks: ((.tasks // []) | sort_by(.position)
+        | map({id: .id, description: .description, complete: .complete})),
+      comments: ($comments | sort_by([.position // 0, .created_at // ""])
+        | map({id: .id, authorId: .author_id, text: .text,
+              createdAt: .created_at, parentId: .parent_id,
+              blocker: (.blocker == true), position: (.position // 0)})),
+      commentCount: ($comments | length),
+      createdAt: .created_at, updatedAt: .updated_at}}' "$WORK/story" ||
     fail "Shortcut sent a story that could not be read" http
 }
 

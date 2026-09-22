@@ -17,6 +17,10 @@ Item {
 
   readonly property var refs: pane.overlay ? pane.overlay.refs : null
   readonly property bool showDone: pane.overlay ? pane.overlay.showDone : false
+  readonly property string scope: pane.overlay ? pane.overlay.listScope : "all"
+  readonly property string today: pane.overlay && pane.overlay.today
+    ? pane.overlay.today : new Date().toISOString().slice(0, 10)
+  readonly property string sprintLabel: Model.currentIterationLabel(pane.refs, pane.today)
   readonly property bool loading: pane.store ? pane.store.loadingStories : false
   readonly property int moving: pane.store ? pane.store.movingStory : 0
 
@@ -27,8 +31,11 @@ Item {
 
   // The sections flattened into rows, because a ListView wants one model and
   // the headers have to be walked past by the cursor anyway.
+  readonly property var scopedStories: Model.storiesInScope(
+    pane.store ? pane.store.stories : [], pane.refs, pane.scope, pane.today)
+
   readonly property var rows: {
-    var sections = Model.sectionStories(pane.store ? pane.store.stories : [], pane.refs, pane.showDone)
+    var sections = Model.sectionStories(pane.scopedStories, pane.refs, pane.showDone)
     var out = []
     for (var i = 0; i < sections.length; i++) {
       out.push({ kind: "header", title: sections[i].title, story: null })
@@ -39,6 +46,24 @@ Item {
   }
 
   property int cursor: 0
+
+  // A refresh, or narrowing to the sprint, can leave the cursor on a header
+  // or past the end. Put it back on a story.
+  onRowsChanged: {
+    if (pane.cursor >= pane.rows.length
+        || (pane.rows.length && pane.rows[pane.cursor] && pane.rows[pane.cursor].kind !== "story"))
+      pane.cursor = pane.firstStoryRow()
+  }
+
+  function setScope(next) {
+    if (!pane.store || next === pane.scope) return
+    pane.store.persist("listScope", next)
+  }
+
+  function toggleScope() {
+    if (pane.scope === "current") pane.setScope("all")
+    else if (pane.sprintLabel !== "") pane.setScope("current")
+  }
 
   function firstStoryRow() {
     for (var i = 0; i < pane.rows.length; i++) if (pane.rows[i].kind === "story") return i
@@ -90,6 +115,9 @@ Item {
       var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
       if (ctrl && event.key === Qt.Key_O) { pane.openInBrowser(); event.accepted = true; return }
 
+      if ((event.modifiers & Qt.AltModifier) && event.key === Qt.Key_I) {
+        pane.toggleScope(); event.accepted = true; return
+      }
       if (event.key === Qt.Key_Down) { pane.moveCursor(1); event.accepted = true }
       else if (event.key === Qt.Key_Up) { pane.moveCursor(-1); event.accepted = true }
       else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
@@ -101,6 +129,31 @@ Item {
       anchors.fill: parent
       spacing: Style.spacing.sm
 
+      RowLayout {
+        Layout.fillWidth: true
+        visible: !!pane.refs
+        spacing: Style.spacing.sm
+
+        Button {
+          bordered: pane.scope !== "current"
+          text: "All"
+          tooltipText: "Everything assigned to you (Alt+I)"
+          foreground: pane.scope !== "current" ? pane.accent : pane.muted
+          fontFamily: pane.fontFamily
+          onClicked: pane.setScope("all")
+        }
+
+        Button {
+          bordered: pane.scope === "current"
+          enabled: pane.sprintLabel !== ""
+          text: pane.sprintLabel !== "" ? pane.sprintLabel : "No current sprint"
+          tooltipText: "Only the sprint today falls inside (Alt+I)"
+          foreground: pane.scope === "current" ? pane.accent : pane.muted
+          fontFamily: pane.fontFamily
+          onClicked: pane.setScope("current")
+        }
+      }
+
       Text {
         Layout.fillWidth: true
         visible: !pane.rows.length
@@ -109,7 +162,10 @@ Item {
         font.family: pane.fontFamily
         font.pixelSize: Style.font.body
         text: pane.loading ? "Reading your stories..."
-          : (pane.refs ? "Nothing is assigned to you." : "Loading your workspace...")
+          : (!pane.refs ? "Loading your workspace..."
+            : (pane.scope === "current"
+              ? "Nothing assigned to you in the current sprint."
+              : "Nothing is assigned to you."))
       }
 
       ListView {
