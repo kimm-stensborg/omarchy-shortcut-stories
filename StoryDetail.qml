@@ -51,7 +51,19 @@ Item {
   readonly property color accent: view.overlay ? view.overlay.accent : Color.accent
   readonly property color urgent: view.overlay ? view.overlay.urgent : Color.urgent
   readonly property string fontFamily: view.overlay ? view.overlay.fontFamily : Style.font.menuFamily
-  readonly property int rowHeightCap: Style.spacing.controlHeight + Style.spacing.controlGap
+
+  // Keep the state the arrows are on inside the one-row strip. A wrapped grid
+  // hid it, and the arrows then moved a highlight you could not see.
+  function revealState(item) {
+    if (!item || stateScroll.width <= 0) return
+    var maxX = Math.max(0, stateScroll.contentWidth - stateScroll.width)
+    var margin = Style.spacing.sm
+    var x = stateScroll.contentX
+    if (item.x - margin < x) x = item.x - margin
+    else if (item.x + item.width + margin > x + stateScroll.width)
+      x = item.x + item.width + margin - stateScroll.width
+    stateScroll.contentX = Math.max(0, Math.min(maxX, x))
+  }
 
   signal back()
 
@@ -360,19 +372,19 @@ Item {
 
       PanelSeparator { Layout.fillWidth: true; visible: view.moveStates.length > 0 }
 
-      // ---- Moving it. A workspace can have a dozen states with names like
-      // "Review - Definition of Done". As one row they ran straight off the
-      // card; as a dropdown the popup hung off the bottom of it, because the
-      // kit's dropdown always opens downwards and this sits at the bottom.
-      // So they wrap, and past three rows the strip scrolls.
+      // ---- Moving it. The states are one row, in workflow order, and the
+      // row scrolls. Wrapping them put a dozen names like "Review -
+      // Definition of Done" in a block under the story, and the arrows
+      // walked that block in an order the eye could not follow. A dropdown
+      // is worse here: the kit's popup only opens downwards, and this strip
+      // sits on the bottom edge of the card.
       RowLayout {
         Layout.fillWidth: true
         visible: view.moveStates.length > 0
         spacing: Style.spacing.md
 
         Text {
-          Layout.alignment: Qt.AlignTop
-          Layout.topMargin: Style.spacing.xs
+          Layout.alignment: Qt.AlignVCenter
           text: view.busy ? "Moving..." : "Move to"
           color: view.busy ? view.accent : view.muted
           font.family: view.fontFamily
@@ -382,20 +394,32 @@ Item {
         Flickable {
           id: stateScroll
           Layout.fillWidth: true
-          Layout.preferredHeight: Math.min(stateFlow.implicitHeight, view.rowHeightCap * 3)
+          Layout.preferredHeight: stateRow.implicitHeight
           clip: true
-          contentWidth: width
-          contentHeight: stateFlow.implicitHeight
+          flickableDirection: Flickable.HorizontalFlick
+          contentWidth: stateRow.implicitWidth
+          contentHeight: stateRow.implicitHeight
           boundsBehavior: Flickable.StopAtBounds
 
-          Flow {
-            id: stateFlow
-            width: stateScroll.width
+          // A vertical wheel over the strip moves along the workflow. The
+          // description above has its own scroller, and this is not inside it.
+          WheelHandler {
+            onWheel: function(wheel) {
+              var delta = wheel.angleDelta.x !== 0 ? wheel.angleDelta.x : wheel.angleDelta.y
+              var maxX = Math.max(0, stateScroll.contentWidth - stateScroll.width)
+              stateScroll.contentX = Math.max(0, Math.min(maxX, stateScroll.contentX - delta * 0.6))
+              wheel.accepted = true
+            }
+          }
+
+          Row {
+            id: stateRow
             spacing: Style.spacing.controlGap
 
             Repeater {
               model: view.moveStates
               delegate: Button {
+                id: chip
                 required property var modelData
                 required property int index
                 readonly property bool here: modelData.id === view.detail.workflowStateId
@@ -405,7 +429,13 @@ Item {
                 text: modelData.name + (here ? " ·" : "")
                 foreground: picked ? view.accent : view.muted
                 fontFamily: view.fontFamily
+                fontSize: Style.font.caption
+                horizontalPadding: Style.space(8)
+                verticalPadding: Style.space(3)
                 onClicked: view.moveTo(modelData.id)
+                onPickedChanged: if (picked) Qt.callLater(function() { view.revealState(chip) })
+                onXChanged: if (picked) Qt.callLater(function() { view.revealState(chip) })
+                Component.onCompleted: if (picked) Qt.callLater(function() { view.revealState(chip) })
               }
             }
           }

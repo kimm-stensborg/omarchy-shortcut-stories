@@ -166,9 +166,10 @@ no second request.
 
 ## Moving a story
 
-The states run along the bottom of an open story, wrapping onto as many rows
-as they need -- a workspace with a dozen of them, named things like "Review -
-Definition of Done", would otherwise run off the card. `←` `→` pick one and
+The states run along the bottom of an open story in one row, in the order of
+its workflow. A workspace with a dozen of them, named things like "Review -
+Definition of Done", scrolls sideways instead of stacking into a block under
+the story. The state the arrows are on stays in view. `←` `→` pick one and
 `Enter` moves it; a click does the same. The state the story is in keeps a dot
 beside it.
 
