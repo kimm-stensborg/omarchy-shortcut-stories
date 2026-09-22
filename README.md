@@ -179,6 +179,34 @@ board nobody on that team reads.
 
 The story moves the moment you pick, and moves back if Shortcut refuses.
 
+## Solving a story
+
+`Alt+A`, or **Solve** beside Open, hands the open story to a coding agent in
+[Herdr](https://herdr.dev). Herdr keeps the terminal. The panel starts the
+agent, gives it the story, and closes, so the keyboard is Herdr's.
+
+The agent is a new tab, or a new git worktree on a branch named `sc-<id>`.
+Nothing is typed into a pane that is already running. If an agent for that
+story is already up, Solve focuses it and does not send the story again. A
+worktree that already has the branch is opened rather than created. The
+checkout is left in place afterwards; Herdr is where you remove it.
+
+**Workspace**, **Worktree** and **Agent** live in the settings. A workspace
+name means `Alt+A` starts there without asking. Empty means Solve opens a row
+of the workspaces Herdr already has: `←` `→` pick one, `W` toggles a worktree
+and remembers it, `Enter` starts, `Esc` stays on the story. `Alt+Shift+A`
+opens that row even when a workspace is saved, and that choice is only for
+this story. A story that names exactly one of those workspaces has it
+highlighted.
+
+The agent is told the title, the link, the description, the tasks and the
+comments, and to leave the Shortcut story where it is and not to push. In the
+checkout it creates the branch itself. In a worktree the branch is already
+checked out, and the prompt says so.
+
+Herdr is optional. Without it, Solve says so and the rest of the panel is
+unchanged.
+
 ## Settings
 
 `Ctrl + ,`, or the gear. Changes apply as you make them; there is no Save. A
@@ -207,6 +235,9 @@ rather than going stale when this one ends.
 | Opens on | New story | Which pane the keybinding lands on |
 | Show finished stories | off | Keeps done stories in the list |
 | Stories | Everything assigned to me | The list, or only the sprint today falls inside |
+| Workspace | Ask each time | The Herdr workspace Solve starts in |
+| Solve in a worktree | off | Solve checks the story out beside the repo, on `sc-<id>` |
+| Agent | Grok | Which coding agent Solve starts |
 | Refresh while closed | 5 min | How often the count is brought up to date |
 | Demo workspace | off | A made-up workspace; never calls Shortcut |
 
@@ -248,7 +279,12 @@ bin/shortcut mine | jq '.stories[].name'    # what is assigned to you
 echo '{"name":"From the terminal"}' | bin/shortcut create
 bin/shortcut show 1234 | jq -r .story.description
 bin/shortcut move 1234 5002
+bin/solve workspaces | jq '.workspaces[].label'
 ```
+
+`bin/solve start` reads one JSON object on stdin (`workspaceId`, `cwd`,
+`worktree`, `kind`, `agent`, `branch`, `prompt`) and prints one JSON object
+back. It talks to Herdr only. It never sees the Shortcut token.
 
 Everything but `login` and `logout` prints one JSON object, `{"ok": false,
 "code": ..., "error": ...}` when something went wrong. `create` reads its
@@ -261,12 +297,13 @@ newlines and `$` in it survives.
 |------|------|
 | `manifest.json` | Plugin id, entry points, and the bar widget's settings schema |
 | `bin/shortcut` | The only thing that holds the token or speaks HTTP |
+| `bin/solve` | The only thing that talks to Herdr |
 | `Model.js` | Every pure decision: picker lists, the create body, the story list |
 | `Store.qml` | The service: one poller, one reference cache, every CLI call |
 | `Overlay.qml` | The card, the mode switch and the key handling |
 | `ComposePane.qml` | The new-story form |
 | `StoriesPane.qml` | The stories assigned to you |
-| `StoryDetail.qml` | One story opened up: description, tasks, comments, and the states it can move to |
+| `StoryDetail.qml` | One story opened up: description, tasks, comments, where it can move, and Solve |
 | `SettingsPane.qml`, `SettingsColumn.qml` | The settings page |
 | `BarWidget.qml` | The glyph, the count, and the badge for stories you have not opened |
 | `install.sh` | Enables the plugin and binds a key |

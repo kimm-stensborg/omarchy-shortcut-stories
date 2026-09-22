@@ -334,6 +334,139 @@ out=$(SHORTCUT_DEMO=1 "$CLI" show 1234)
 is "demo show includes the comments" "$(jq -r '[.story.comments[].authorId] | join(",")' <<<"$out")" "demo-ada,demo-me"
 is "demo never calls Shortcut"     "$(log | wc -l)" "0"
 
+# ---- solve: Herdr, through a stand-in that records every command ----------
+echo "solve"
+SOLVE="$DIR/bin/solve"
+FIX="$WORK/herdr-fix"
+mkdir -p "$FIX" "$WORK/bin"
+cat >"$WORK/bin/herdr" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >> "${HERDR_LOG:?}"
+case "$1 $2" in
+  "workspace list") cat "${HERDR_FIX:?}/workspaces.json"; exit 0 ;;
+  "pane list") cat "$HERDR_FIX/panes.json"; exit 0 ;;
+  "agent list") cat "$HERDR_FIX/agents.json"; exit 0 ;;
+  "agent focus") exit 0 ;;
+  "agent start")
+    if [[ -n ${HERDR_START_CODE:-} ]]; then
+      jq -cn --arg code "$HERDR_START_CODE" '{error: {code: $code, message: "not ready"}}' >&2
+      exit 1
+    fi
+    printf '%s\n' '{"result":{"agent":{"name":"started"}}}'
+    exit 0 ;;
+  "agent prompt")
+    printf '%s' "$4" > "$HERDR_FIX/prompt.txt"
+    if [[ -n ${HERDR_PROMPT_CODE:-} ]]; then
+      jq -cn --arg code "$HERDR_PROMPT_CODE" '{error: {code: $code, message: "blocked"}}' >&2
+      exit 1
+    fi
+    exit 0 ;;
+  "tab create")
+    printf '%s\n' '{"result":{"type":"tab_created","tab":{"tab_id":"w9:t9"},"root_pane":{"pane_id":"w9:p9"}}}'
+    exit 0 ;;
+  "worktree list") cat "$HERDR_FIX/worktrees.json"; exit 0 ;;
+  "worktree create")
+    printf '%s\n' '{"result":{"type":"worktree_created","already_open":false,"workspace":{"workspace_id":"wT"},"tab":{"tab_id":"wT:t1"},"root_pane":{"pane_id":"wT:p1"},"worktree":{"path":"/tmp/wt","branch":"sc-1234"}}}'
+    exit 0 ;;
+  "worktree open")
+    if [[ -n ${HERDR_ALREADY:-} ]]; then
+      printf '%s\n' '{"result":{"type":"worktree_opened","already_open":true,"workspace":{"workspace_id":"wT"},"tab":{"tab_id":"wT:t1"},"root_pane":{"pane_id":"wT:p1"},"worktree":{"path":"/tmp/wt","branch":"sc-1234"}}}'
+    else
+      printf '%s\n' '{"result":{"type":"worktree_opened","already_open":false,"workspace":{"workspace_id":"wT"},"tab":{"tab_id":"wT:t1"},"root_pane":{"pane_id":"wT:p1"},"worktree":{"path":"/tmp/wt","branch":"sc-1234"}}}'
+    fi
+    exit 0 ;;
+esac
+printf 'unexpected: %s\n' "$*" >&2
+exit 1
+SH
+chmod +x "$WORK/bin/herdr"
+cat >"$FIX/workspaces.json" <<'JSON'
+{"result":{"workspaces":[
+  {"workspace_id":"w9","label":"omarchy-shortcut-stories"},
+  {"workspace_id":"w2","label":"kvittering"}
+]}}
+JSON
+cat >"$FIX/panes.json" <<'JSON'
+{"result":{"panes":[
+  {"pane_id":"w9:p1","workspace_id":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories"},
+  {"pane_id":"w2:p1","workspace_id":"w2","cwd":"/home/kimm/Projects/kvittering"}
+]}}
+JSON
+printf '%s\n' '{"result":{"agents":[{"agent":"grok","agent_status":"working","pane_id":"w9:p2"}]}}' >"$FIX/agents.json"
+printf '%s\n' '{"result":{"worktrees":[]}}' >"$FIX/worktrees.json"
+: >"$WORK/herdr.log"
+solve() {
+  PATH="$WORK/bin:$PATH" HERDR_LOG="$WORK/herdr.log" HERDR_FIX="$FIX" \
+    HERDR_START_CODE= HERDR_PROMPT_CODE= HERDR_ALREADY= \
+    "$SOLVE" "$@"
+}
+reset_herdr() { : >"$WORK/herdr.log"; rm -f "$FIX/prompt.txt"; }
+
+mkdir -p "$WORK/empty-bin"
+ln -s "$(command -v jq)" "$WORK/empty-bin/jq"
+out=$(PATH="$WORK/empty-bin" "$SOLVE" workspaces)
+is "no herdr is a clean failure" "$(jq -r .code <<<"$out")" "noherdr"
+
+out=$(solve workspaces)
+is "workspaces come back" "$(jq -r '.workspaces | length' <<<"$out")" "2"
+is "cwd rides along" "$(jq -r '.workspaces[] | select(.id=="w2").cwd' <<<"$out")" "/home/kimm/Projects/kvittering"
+
+reset_herdr
+body='{"workspaceId":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories","worktree":false,"kind":"grok","agent":"s1234","branch":"sc-1234","prompt":"Solve sc-1234"}'
+out=$(printf '%s' "$body" | solve start)
+is "a tab start succeeds" "$(jq -r .ok <<<"$out")" "true"
+is "and it prompted" "$(jq -r .prompted <<<"$out")" "true"
+is "in a new tab" "$(jq -r .where <<<"$out")" "tab"
+is "the prompt was handed over" "$(cat "$FIX/prompt.txt")" "Solve sc-1234"
+has "it opened a tab, not a worktree" "$(cat "$WORK/herdr.log")" "tab create"
+hasnt "a checkout start does not create a worktree" "$(cat "$WORK/herdr.log")" "worktree create"
+has "the tab keeps the cwd" "$(cat "$WORK/herdr.log")" "--cwd /home/kimm/Projects/omarchy-shortcut-stories"
+
+reset_herdr
+out=$(printf '%s' '{"workspaceId":"w9","worktree":true,"kind":"claude","agent":"s1234","branch":"sc-1234","prompt":"go"}' | solve start)
+is "a new worktree is created" "$(jq -r .where <<<"$out")" "worktree"
+has "create, not open" "$(grep -c 'worktree create' "$WORK/herdr.log")" "1"
+hasnt "and no extra tab" "$(cat "$WORK/herdr.log")" "tab create"
+has "the agent starts in the new pane" "$(cat "$WORK/herdr.log")" "agent start s1234 --kind claude --pane wT:p1"
+
+reset_herdr
+printf '%s\n' '{"result":{"worktrees":[{"branch":"sc-1234","path":"/tmp/wt"}]}}' >"$FIX/worktrees.json"
+out=$(printf '%s' '{"workspaceId":"w9","worktree":true,"kind":"grok","agent":"s1234","branch":"sc-1234","prompt":"go"}' | solve start)
+is "an existing branch is opened" "$(jq -r .ok <<<"$out")" "true"
+has "open, not create" "$(grep -c 'worktree open' "$WORK/herdr.log")" "1"
+hasnt "create stays away" "$(cat "$WORK/herdr.log")" "worktree create"
+
+reset_herdr
+HERDR_ALREADY=1
+out=$(HERDR_ALREADY=1 PATH="$WORK/bin:$PATH" HERDR_LOG="$WORK/herdr.log" HERDR_FIX="$FIX" \
+  "$SOLVE" start <<'JSON'
+{"workspaceId":"w9","worktree":true,"kind":"grok","agent":"s1234","branch":"sc-1234","prompt":"go"}
+JSON
+)
+is "a busy worktree gets its own tab" "$(jq -r .paneId <<<"$out")" "w9:p9"
+has "the tab follows the open" "$(grep -c 'tab create' "$WORK/herdr.log")" "1"
+unset HERDR_ALREADY
+
+reset_herdr
+printf '%s\n' '{"result":{"agents":[{"name":"s1234","agent_status":"idle","pane_id":"w9:p3"}]}}' >"$FIX/agents.json"
+out=$(printf '%s' "$body" | solve start)
+is "an agent already on it is not prompted" "$(jq -r .prompted <<<"$out")" "false"
+is "it is focused instead" "$(jq -r .where <<<"$out")" "existing"
+hasnt "no second start" "$(cat "$WORK/herdr.log")" "agent start"
+[[ -f $FIX/prompt.txt ]] && no "no prompt was sent" "prompt file exists" "absent" || ok "no prompt was sent"
+
+reset_herdr
+printf '%s\n' '{"result":{"agents":[]}}' >"$FIX/agents.json"
+out=$(printf '%s' '{"workspaceId":"w9","worktree":false,"kind":"grok","agent":"s1234","branch":"sc-1234","prompt":"go"}' \
+  | HERDR_START_CODE=agent_not_ready PATH="$WORK/bin:$PATH" HERDR_LOG="$WORK/herdr.log" HERDR_FIX="$FIX" "$SOLVE" start)
+is "a blocked start waits" "$(jq -r .status <<<"$out")" "blocked"
+is "and does not pretend it prompted" "$(jq -r .prompted <<<"$out")" "false"
+
+reset_herdr
+out=$(printf '%s' '{"workspaceId":"w9","kind":"nope","agent":"s1","branch":"sc-1","prompt":"go"}' | solve start)
+is "an unknown agent is refused" "$(jq -r .code <<<"$out")" "usage"
+is "and herdr is not asked" "$(wc -l <"$WORK/herdr.log" | tr -d ' ')" "0"
+
 # ---- QML ------------------------------------------------------------------
 echo "qml"
 # The node cases below never touch the .qml files, and omarchy-shell swallows
@@ -607,6 +740,55 @@ cases.push(
   ["an empty list baselines to nothing", M.seenIdsOf([]).length, 0],
   ["the same ids agree in either order", M.sameIds(["2","1"], [1, "2"]), true],
   ["a different id does not", M.sameIds(["1"], ["1","2"]), false],
+
+  // handing a story to Herdr
+  ["the agent name is the story", M.solveAgentName(18872), "s18872"],
+  ["a blank id is no agent", M.solveAgentName(""), ""],
+  ["a long id stays inside herdr's limit", M.solveAgentName("9".repeat(40)).length, 32],
+  ["the branch is the reference", M.solveBranch(18872), "sc-18872"],
+  ["an empty workspace asks", M.solveTarget([{label:"kvittering"}], "").ask, true],
+  ["a saved name does not", M.solveTarget([{id:"w2", label:"kvittering"}], "Kvittering").ask, false],
+  ["and it resolves the live workspace",
+    M.solveTarget([{id:"w2", label:"kvittering"}], "kvittering").workspace.id, "w2"],
+  ["a name herdr lost asks again", M.solveTarget([{label:"kvittering"}], "casino").ask, true],
+  ["one named workspace is suggested",
+    M.suggestWorkspace(
+      [{id:"w2", label:"kvittering"}, {id:"w9", label:"omarchy-shortcut-stories"}],
+      "Please look at kvittering").id, "w2"],
+  ["two names means no guess",
+    M.suggestWorkspace([{label:"kvittering"},{label:"casino"}], "kvittering and casino"), null],
+  ["a shorter name is not a longer one",
+    M.suggestWorkspace([{label:"notes"}], "omarchy-notes"), null],
+  ["the prompt keeps the author's line break",
+    M.solvePrompt({id:7, name:"Fix", description:"a\nb", appUrl:"https://example/7"}, refs, false).includes("a\nb"), true],
+  ["and names the comment's author",
+    M.solvePrompt({id:7, name:"Fix", description:"", comments:[
+      {authorId:"ada-uuid", text:"Second", position:2},
+      {authorId:"me-uuid", text:"First", position:1}]}, refs, false).includes("- Kimm Stensborg: First"), true],
+  ["a checkout creates the branch",
+    M.solvePrompt({id:7, name:"Fix", description:""}, refs, false).includes("Create a branch named sc-7"), true],
+  ["a worktree is already on it",
+    M.solvePrompt({id:7, name:"Fix", description:""}, refs, true).includes("already on branch sc-7"), true],
+  ["a worktree is not told to check it out again",
+    M.solvePrompt({id:7, name:"Fix", description:""}, refs, true).includes("Create a branch"), false],
+  ["a long prompt points at the story",
+    (() => {
+      const text = M.solvePrompt({id:7, name:"Fix", description:"word ".repeat(4000), appUrl:"https://example/7"}, refs, false)
+      return text.length <= M.SOLVE_PROMPT_LIMIT && text.endsWith("https://example/7.")
+    })(), true],
+  ["the caption names the worktree",
+    M.solveCaption({label:"kvittering"}, true, 7), "Worktree sc-7 under kvittering"],
+  ["and the tab when it stays in the checkout",
+    M.solveCaption({label:"kvittering"}, false, 7), "New tab in kvittering"],
+  ["workspaces lead with asking",
+    M.settingOptions(M.settingRow("solveWorkspace"), null, TODAY, "", [{label:"kvittering"}])[0].label,
+    "Ask each time"],
+  ["and then the live names",
+    M.settingOptions(M.settingRow("solveWorkspace"), null, TODAY, "", [{label:"kvittering"},{label:"casino"}])
+      .map(o => o.label).join(","),
+    "Ask each time,casino,kvittering"],
+  ["the agent defaults to grok", M.readSetting({}, "agentKind"), "grok"],
+  ["worktree defaults off", M.readSetting({}, "solveWorktree"), false],
 
   // settings
   ["every option has a kind", M.SETTINGS.every(s => s.rows.every(r => ["text","number","toggle","choice","multi","picker"].includes(r.kind))), true],

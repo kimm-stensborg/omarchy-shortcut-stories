@@ -1,0 +1,186 @@
+#!/bin/bash
+# Hands one Shortcut story to an agent running in Herdr.
+#
+#   solve workspaces     the workspaces Herdr already has, with each one's cwd
+#   solve start          read one JSON object on stdin and start an agent there
+#
+# The object start reads is {workspaceId, cwd, worktree, kind, agent, branch,
+# prompt}. worktree true checks out branch sc-<id> beside the repo; false opens
+# a new tab in the workspace that is already there. Either way the agent is a
+# new pane. An agent already named for this story is focused and not prompted
+# again.
+#
+# This file never sees the Shortcut token. Herdr is a local socket. Both
+# commands print one JSON object, {"ok": false, "code": ..., "error": ...} on
+# failure, so the panel has exactly one thing to parse.
+
+set -uo pipefail
+
+fail() {
+  jq -cn --arg error "$1" --arg code "${2:-error}" '{ok: false, code: $code, error: $error}'
+  exit 1
+}
+
+command -v herdr >/dev/null 2>&1 || fail "Herdr is not installed" noherdr
+command -v jq >/dev/null 2>&1 || fail "jq is required" error
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+HERDR_STATUS=0
+
+# Herdr prints its answer on stdout and a JSON error on stderr. The status is
+# remembered so a caller can tell "the agent is waiting" from "Herdr broke".
+run_herdr() {
+  HERDR_STATUS=0
+  herdr "$@" >"$WORK/out.json" 2>"$WORK/err.json" || HERDR_STATUS=$?
+  return "$HERDR_STATUS"
+}
+
+herdr_message() {
+  local msg
+  msg=$(jq -r '.error.message // empty' "$WORK/err.json" 2>/dev/null | head -1)
+  [[ -n $msg ]] || msg=$(tr '\n' ' ' <"$WORK/err.json" | head -c 300)
+  printf '%s' "${msg:-Herdr failed}"
+}
+
+herdr_code() {
+  jq -r '.error.code // empty' "$WORK/err.json" 2>/dev/null | head -1
+}
+
+require_herdr() {
+  [[ $HERDR_STATUS -eq 0 ]] || fail "$(herdr_message)" herdr
+}
+
+# Focus is best-effort: the agent is already running if this fails, and the
+# panel then says so instead of claiming the keyboard has moved.
+focus_agent() {
+  run_herdr agent focus "$1"
+  [[ $HERDR_STATUS -eq 0 ]]
+}
+
+cmd_workspaces() {
+  run_herdr workspace list
+  require_herdr
+  cp "$WORK/out.json" "$WORK/ws.json"
+  run_herdr pane list
+  require_herdr
+  cp "$WORK/out.json" "$WORK/panes.json"
+  jq -n --slurpfile ws "$WORK/ws.json" --slurpfile panes "$WORK/panes.json" '
+    ($ws[0].result.workspaces // []) as $workspaces
+    | ($panes[0].result.panes // []) as $panes
+    | {ok: true, workspaces: [
+        $workspaces[] | . as $w
+        | ($panes | map(select(.workspace_id == $w.workspace_id and ((.cwd // "") != ""))) | .[0].cwd // "") as $cwd
+        | {id: $w.workspace_id, label: ($w.label // ""), cwd: $cwd}
+      ]}' || fail "Herdr sent a workspace list that could not be read" herdr
+}
+
+# A fresh shell. An already-open worktree's root pane may be busy, so that
+# case gets its own tab; a checkout we just created is a new shell already.
+fresh_pane() {
+  local ws=$1 cwd=$2
+  local -a args=(tab create --workspace "$ws" --no-focus)
+  [[ -n $cwd && $cwd == /* && $cwd != *$'\n'* ]] && args+=(--cwd "$cwd")
+  run_herdr "${args[@]}"
+  require_herdr
+  jq -r '.result.root_pane.pane_id // empty' "$WORK/out.json"
+}
+
+cmd_start() {
+  cat >"$WORK/body.json"
+  local ws cwd worktree kind agent branch prompt
+  ws=$(jq -r '.workspaceId // ""' "$WORK/body.json") || fail "start needs a JSON object" usage
+  cwd=$(jq -r '.cwd // ""' "$WORK/body.json")
+  worktree=$(jq -r '.worktree // false' "$WORK/body.json")
+  kind=$(jq -r '.kind // ""' "$WORK/body.json")
+  agent=$(jq -r '.agent // ""' "$WORK/body.json")
+  branch=$(jq -r '.branch // ""' "$WORK/body.json")
+  prompt=$(jq -r '.prompt // ""' "$WORK/body.json")
+
+  [[ $ws =~ ^[A-Za-z0-9:_-]+$ ]] || fail "start needs a workspace id" usage
+  [[ $agent =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || fail "start needs an agent name" usage
+  [[ $branch =~ ^sc-[0-9]+$ ]] || fail "start needs a branch" usage
+  [[ $kind =~ ^(grok|claude|codex|cursor|opencode)$ ]] || fail "start needs a known agent" usage
+  [[ -n $prompt ]] || fail "start needs a prompt" usage
+
+  run_herdr agent list
+  require_herdr
+  local existing
+  existing=$(jq -r --arg name "$agent" \
+    '[.result.agents[]? | select(.name == $name)] | .[0].agent_status // empty' "$WORK/out.json")
+  if [[ -n $existing ]]; then
+    local focused=false
+    focus_agent "$agent" && focused=true
+    jq -cn --arg status "$existing" --argjson focused "$focused" \
+      '{ok: true, prompted: false, focused: $focused, status: $status, where: "existing"}'
+    return
+  fi
+
+  local pane="" where="tab" tab_id=""
+  if [[ $worktree == true ]]; then
+    where=worktree
+    run_herdr worktree list --workspace "$ws"
+    require_herdr
+    local found
+    found=$(jq -r --arg branch "$branch" \
+      '[.result.worktrees[]? | select(.branch == $branch)] | length' "$WORK/out.json")
+    if [[ $found != 0 ]]; then
+      run_herdr worktree open --workspace "$ws" --branch "$branch" --no-focus
+    else
+      run_herdr worktree create --workspace "$ws" --branch "$branch" --no-focus
+    fi
+    require_herdr
+    local opened_ws path already
+    opened_ws=$(jq -r '.result.workspace.workspace_id // empty' "$WORK/out.json")
+    path=$(jq -r '.result.worktree.path // empty' "$WORK/out.json")
+    already=$(jq -r '.result.already_open // false' "$WORK/out.json")
+    pane=$(jq -r '.result.root_pane.pane_id // empty' "$WORK/out.json")
+    tab_id=$(jq -r '.result.tab.tab_id // empty' "$WORK/out.json")
+    [[ -n $opened_ws ]] || fail "Herdr did not open a worktree" herdr
+    if [[ $already == true ]]; then
+      pane=$(fresh_pane "$opened_ws" "$path")
+      tab_id=$(jq -r '.result.tab.tab_id // empty' "$WORK/out.json")
+    fi
+  else
+    pane=$(fresh_pane "$ws" "$cwd")
+    tab_id=$(jq -r '.result.tab.tab_id // empty' "$WORK/out.json")
+  fi
+  [[ -n $pane ]] || fail "Herdr did not return a pane" herdr
+
+  if ! run_herdr agent start "$agent" --kind "$kind" --pane "$pane"; then
+    local code
+    code=$(herdr_code)
+    if [[ $code == agent_not_ready || $code == agent_blocked ]]; then
+      local focused=false
+      focus_agent "$agent" && focused=true
+      jq -cn --arg where "$where" --arg tab "$tab_id" --arg pane "$pane" --argjson focused "$focused" \
+        '{ok: true, prompted: false, focused: $focused, status: "blocked", where: $where, tabId: $tab, paneId: $pane}'
+      return
+    fi
+    fail "$(herdr_message)" herdr
+  fi
+
+  if ! run_herdr agent prompt "$agent" "$prompt"; then
+    local code
+    code=$(herdr_code)
+    if [[ $code == agent_blocked || $code == agent_not_ready ]]; then
+      local focused=false
+      focus_agent "$agent" && focused=true
+      jq -cn --arg where "$where" --arg tab "$tab_id" --arg pane "$pane" --argjson focused "$focused" \
+        '{ok: true, prompted: false, focused: $focused, status: "blocked", where: $where, tabId: $tab, paneId: $pane}'
+      return
+    fi
+    fail "$(herdr_message)" herdr
+  fi
+
+  local focused=false
+  focus_agent "$agent" && focused=true
+  jq -cn --arg where "$where" --arg tab "$tab_id" --arg pane "$pane" --argjson focused "$focused" \
+    '{ok: true, prompted: true, focused: $focused, status: "working", where: $where, tabId: $tab, paneId: $pane}'
+}
+
+case ${1:-} in
+  workspaces) cmd_workspaces ;;
+  start) cmd_start ;;
+  *) fail "usage: solve workspaces | solve start" usage ;;
+esac

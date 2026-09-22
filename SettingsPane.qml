@@ -92,6 +92,7 @@ Item {
               sections: modelData
               values: pane.settings
               refs: pane.overlay ? pane.overlay.refs : null
+              workspaces: pane.store ? pane.store.workspaces : null
               today: new Date().toISOString().slice(0, 10)
               fg: pane.foreground
               muted: pane.muted

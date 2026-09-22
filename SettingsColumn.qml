@@ -22,6 +22,7 @@ Column {
   // A `picker` row takes its options from the workspace rather than from the
   // settings spec, so the column needs the reference data to render one.
   property var refs: null
+  property var workspaces: null
   property string today: ""
 
   property color fg: Color.foreground
@@ -136,13 +137,18 @@ Column {
             SearchableDropdown {
               width: setting.width
               showLabel: false
-              enabled: root.refs !== null
+              // Herdr's workspaces do not need a Shortcut token. The other
+              // pickers do: their options come from the reference cache.
+              enabled: setting.row.source === "workspaces" || root.refs !== null
               // The iteration list narrows to whatever team is set above it,
               // the same way it does in the form itself.
               options: Model.settingOptions(setting.row, root.refs, root.today,
-                Model.resolveTeamSetting(root.refs, Model.readSetting(root.values, "defaultTeam")))
+                Model.resolveTeamSetting(root.refs, Model.readSetting(root.values, "defaultTeam")),
+                root.workspaces)
               value: setting.value
-              placeholderText: root.refs ? "Search..." : "Loading your workspace..."
+              placeholderText: setting.row.source === "workspaces"
+                ? (root.workspaces === null ? "Loading Herdr..." : "Search...")
+                : (root.refs ? "Search..." : "Loading your workspace...")
               foreground: root.fg
               accent: root.accent
               fontFamily: root.fontFamily

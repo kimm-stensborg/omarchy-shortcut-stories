@@ -112,6 +112,35 @@
         "defaultValue": "all"
       },
       {
+        "key": "solveWorkspace",
+        "type": "string",
+        "label": "Herdr workspace Solve starts in (a workspace name, or empty to ask each time)",
+        "defaultValue": ""
+      },
+      {
+        "key": "solveWorktree",
+        "type": "enum",
+        "label": "Solve in a git worktree",
+        "options": [
+          "on",
+          "off"
+        ],
+        "defaultValue": "off"
+      },
+      {
+        "key": "agentKind",
+        "type": "enum",
+        "label": "Agent Solve starts",
+        "options": [
+          "grok",
+          "claude",
+          "codex",
+          "cursor",
+          "opencode"
+        ],
+        "defaultValue": "grok"
+      },
+      {
         "key": "refreshMinutes",
         "type": "integer",
         "label": "Refresh interval while closed (minutes)",

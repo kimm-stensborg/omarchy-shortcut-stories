@@ -128,6 +128,7 @@ Item {
       : (payload.mode === "compose" ? "compose" : root.defaultMode)
     root.discardArmed = false
     if (root.store) root.store.ensureRefs()
+    if (root.mode === "settings" && root.store) root.store.refreshWorkspaces()
     if (!root.formSeeded || !root.draftDirty()) root.resetForm()
     root.opened = true
     Qt.callLater(function() { root.focusPane() })
@@ -151,6 +152,7 @@ Item {
     if (root.store && root.storyOpen) root.store.closeStory()
     root.mode = next
     root.discardArmed = false
+    if (next === "settings" && root.store) root.store.refreshWorkspaces()
     Qt.callLater(function() { root.focusPane() })
   }
 
@@ -353,8 +355,17 @@ Item {
     if (root.store && root.store.stale) return "Showing reference data from earlier — Ctrl+R to retry"
     if (root.mode === "compose")
       return "Enter files it · Ctrl+Enter from anywhere · Tab moves on · Alt+2 your stories · Esc closes"
-    if (root.mode === "mine" && root.storyOpen)
-      return "← → pick a state · Enter moves it · Ctrl+O opens it · Esc back to the list"
+    if (root.store && root.store.solving)
+      return "Starting the agent in Herdr…"
+    if (root.store && root.store.solveError && root.mode === "mine" && root.storyOpen)
+      return root.store.solveError
+    if (root.mode === "mine" && root.storyOpen && root.store && root.store.solvePicking)
+      return "← → pick a repo · W a worktree · Enter starts · Esc stays on the story"
+    if (root.mode === "mine" && root.storyOpen) {
+      var where = Model.readSetting(root.settings, "solveWorkspace")
+      var solve = where !== "" ? "Alt+A solves in " + where : "Alt+A solves it"
+      return solve + " · Alt+Shift+A picks a repo · ← → pick a state · Enter moves it · Ctrl+O opens it · Esc back"
+    }
     if (root.mode === "mine")
       return "Enter opens a story · Alt+I the current sprint · Ctrl+O in your browser · Esc closes"
     return "Ctrl+R refreshes · Alt+1 a new story · Esc closes"
@@ -369,6 +380,11 @@ Item {
     overlay: root
     store: root.store
   } }
+
+  Connections {
+    target: root.store
+    function onSolveReadyToClose() { root.dismiss() }
+  }
 
   Component { id: detailPane; StoryDetail {
     overlay: root

@@ -570,6 +570,15 @@ var SETTINGS = [
       options: [{ value: "all", label: "Everything assigned to me" },
                 { value: "current", label: "The current sprint" }] }
   ]},
+  { title: "Solving", rows: [
+    { key: "solveWorkspace", kind: "picker", source: "workspaces", label: "Workspace", fallback: "",
+      hint: "Where Solve starts an agent. Empty asks each time" },
+    { key: "solveWorktree", kind: "toggle", label: "Solve in a worktree", fallback: false },
+    { key: "agentKind", kind: "choice", label: "Agent", fallback: "grok",
+      options: [{ value: "grok", label: "Grok" }, { value: "claude", label: "Claude" },
+                { value: "codex", label: "Codex" }, { value: "cursor", label: "Cursor" },
+                { value: "opencode", label: "OpenCode" }] }
+  ]},
   { title: "Data", rows: [
     { key: "refreshMinutes", kind: "number", label: "Refresh while closed (minutes)",
       fallback: 5, min: 1, max: 60 },
@@ -581,9 +590,24 @@ var SETTINGS = [
 // What a picker row offers. The values are what get stored, so they have to
 // survive a workspace that changes underneath them: "me" and "current" are
 // kept as words rather than resolved to an id at the time you pick them.
-function settingOptions(row, refs, todayIso, groupId) {
+function settingOptions(row, refs, todayIso, groupId, workspaces) {
   if (!row) return []
   if (row.kind !== "picker") return row.options || []
+  if (row.source === "workspaces") {
+    var spaces = [{ value: "", label: "Ask each time" }]
+    var named = (workspaces || []).slice().sort(function(a, b) {
+      var al = str(a.label).toLowerCase(), bl = str(b.label).toLowerCase()
+      return al < bl ? -1 : (al > bl ? 1 : 0)
+    })
+    var seen = {}
+    for (var w = 0; w < named.length; w++) {
+      var label = str(named[w].label)
+      if (label === "" || seen[label]) continue
+      seen[label] = true
+      spaces.push({ value: label, label: label })
+    }
+    return spaces
+  }
   if (row.source === "teams") return groupOptions(refs)
   if (row.source === "members") {
     var people = [{ value: "", label: "Unassigned" }, { value: "me", label: "Me" }]
@@ -909,6 +933,135 @@ function sameIds(a, b) {
   return true
 }
 
+// ---- Handing a story to Herdr.
+// The agent name has to match Herdr's alias rule, and the branch is the same
+// sc- reference the panel already shows, so the checkout and the story can be
+// told apart later.
+
+var SOLVE_PROMPT_LIMIT = 12000
+
+function solveId(storyId) {
+  var id = String(storyId === null || storyId === undefined ? "" : storyId).replace(/[^0-9]/g, "")
+  return id
+}
+
+function solveAgentName(storyId) {
+  var id = solveId(storyId)
+  if (!id) return ""
+  return ("s" + id).slice(0, 32)
+}
+
+function solveBranch(storyId) {
+  var id = solveId(storyId)
+  return id ? "sc-" + id : ""
+}
+
+function escapeRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+// A saved workspace name, matched against the live list. An empty name, or one
+// Herdr no longer has, means Solve has to ask. The match is the label, not the
+// session id: those ids do not survive a restart.
+function workspaceByLabel(workspaces, label) {
+  var wanted = trim(label).toLowerCase()
+  if (!wanted) return null
+  var list = workspaces || []
+  for (var i = 0; i < list.length; i++)
+    if (str(list[i].label).toLowerCase() === wanted) return list[i]
+  return null
+}
+
+function solveTarget(workspaces, savedLabel) {
+  var found = workspaceByLabel(workspaces, savedLabel)
+  if (!found) return { ask: true, workspace: null }
+  return { ask: false, workspace: found }
+}
+
+// The story text names exactly one workspace, so the row can land there.
+// Hyphen stays inside the name: "notes" is not "omarchy-notes".
+function suggestWorkspace(workspaces, text) {
+  var hay = str(text).toLowerCase()
+  var hits = []
+  var list = workspaces || []
+  for (var i = 0; i < list.length; i++) {
+    var label = str(list[i].label).toLowerCase()
+    if (label.length < 3) continue
+    var re = new RegExp("(^|[^a-z0-9-])" + escapeRegExp(label) + "([^a-z0-9-]|$)")
+    if (re.test(hay)) hits.push(list[i])
+  }
+  return hits.length === 1 ? hits[0] : null
+}
+
+function solveHaystack(raw) {
+  var parts = [str(raw && raw.name), str(raw && raw.description)]
+  var comments = (raw && raw.comments) || []
+  for (var i = 0; i < comments.length; i++) parts.push(str(comments[i] && comments[i].text))
+  return parts.join("\n")
+}
+
+function capSolvePrompt(text, url) {
+  if (text.length <= SOLVE_PROMPT_LIMIT) return text
+  var note = "\n\nThe rest is on " + (url || "the story") + "."
+  var room = SOLVE_PROMPT_LIMIT - note.length
+  if (room < 1) return note.slice(0, SOLVE_PROMPT_LIMIT)
+  var cut = text.slice(0, room)
+  var sp = cut.lastIndexOf(" ")
+  if (sp > room - 80) cut = cut.slice(0, sp)
+  return cut + note
+}
+
+// What the agent is asked. The description and the comments stay as they were
+// written: the view's hard breaks are for Qt's markdown, and an agent should
+// see the author's newlines. A worktree is already on the branch, so the
+// prompt must not tell the agent to check that branch out again.
+function solvePrompt(raw, refs, worktree) {
+  var branch = solveBranch(raw && raw.id)
+  if (!branch) return ""
+  var url = str(raw.appUrl)
+  var lines = ["Solve Shortcut story " + branch + ".", "", "Title: " + str(raw.name)]
+  if (url) lines.push("URL: " + url)
+  lines.push("", "Description:", str(raw.description) || "(none)", "", "Tasks:")
+  var tasks = raw.tasks || []
+  if (!tasks.length) lines.push("(none)")
+  for (var i = 0; i < tasks.length; i++) {
+    var task = tasks[i] || {}
+    lines.push("- [" + (task.complete === true ? "x" : " ") + "] " + str(task.description))
+  }
+  lines.push("", "Comments, oldest first:")
+  var comments = (raw.comments || []).filter(function(c) {
+    return c && c.deleted !== true && trim(c.text) !== ""
+  })
+  comments.sort(function(a, b) {
+    var ap = a.position || 0, bp = b.position || 0
+    if (ap !== bp) return ap - bp
+    var ac = str(a.createdAt), bc = str(b.createdAt)
+    return ac < bc ? -1 : (ac > bc ? 1 : 0)
+  })
+  if (!comments.length) lines.push("(none)")
+  for (var j = 0; j < comments.length; j++) {
+    var comment = comments[j]
+    var author = findMember(refs, comment.authorId)
+    var who = author ? str(author.name)
+      : (str(comment.authorId) === "" ? "Someone" : "Someone who has left")
+    lines.push("- " + who + ": " + str(comment.text))
+  }
+  lines.push("")
+  if (worktree)
+    lines.push("This checkout is already on branch " + branch + ". Implement the story here.")
+  else
+    lines.push("Create a branch named " + branch + " and implement the story there.")
+  lines.push("Leave the Shortcut story where it is. Do not push.")
+  return capSolvePrompt(lines.join("\n"), url)
+}
+
+function solveCaption(workspace, worktree, storyId) {
+  var name = workspace ? str(workspace.label) : ""
+  var branch = solveBranch(storyId)
+  if (worktree) return "Worktree " + branch + (name ? " under " + name : "")
+  return name ? "New tab in " + name : "New tab"
+}
+
 // What the bar shows next to the glyph.
 function barLabel(stories, refs, mode) {
   if (mode === "none") return ""
@@ -947,6 +1100,11 @@ if (typeof module !== "undefined") {
     storyKey: storyKey, unseenStories: unseenStories, unseenCount: unseenCount,
     noteSeen: noteSeen, seenIdsOf: seenIdsOf, sameIds: sameIds,
     settingOptions: settingOptions, resolveTeamSetting: resolveTeamSetting,
-    resolveOwnerSetting: resolveOwnerSetting, resolveIterationSetting: resolveIterationSetting
+    resolveOwnerSetting: resolveOwnerSetting, resolveIterationSetting: resolveIterationSetting,
+    SOLVE_PROMPT_LIMIT: SOLVE_PROMPT_LIMIT,
+    solveAgentName: solveAgentName, solveBranch: solveBranch,
+    workspaceByLabel: workspaceByLabel, solveTarget: solveTarget,
+    suggestWorkspace: suggestWorkspace, solveHaystack: solveHaystack,
+    solvePrompt: solvePrompt, solveCaption: solveCaption
   }
 }

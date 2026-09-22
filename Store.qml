@@ -3,7 +3,9 @@ import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
 
-// The service: the only thing in this plugin that runs bin/shortcut.
+// The service: the only thing in this plugin that runs bin/shortcut, and the
+// only thing that runs bin/solve. The token stays in the first; Herdr stays
+// in the second.
 //
 // It has to be a service rather than living in the bar widget, because the bar
 // instantiates its widget once per monitor. Polling in there would triple the
@@ -22,6 +24,7 @@ Item {
     ? String(root.manifest.__sourceDir)
     : Quickshell.env("HOME") + "/.config/omarchy/plugins/" + root.pluginId
   readonly property string cli: root.pluginDir + "/bin/shortcut"
+  readonly property string solveCli: root.pluginDir + "/bin/solve"
 
   // Settings live on the bar widget's entry, so the service reads them off the
   // shell config rather than being handed them: it is loaded before any bar
@@ -218,7 +221,11 @@ Item {
     root.detailFor = storyId
     root.detail = null
     root.detailError = ""
+    root.solveError = ""
+    root.solvePicking = false
+    root.solvePending = false
     root.loadingDetail = true
+    root.refreshWorkspaces()
     detailProc.command = [root.cli, "show", String(storyId)]
     detailProc.running = true
   }
@@ -227,6 +234,9 @@ Item {
     root.detailFor = 0
     root.detail = null
     root.detailError = ""
+    root.solvePicking = false
+    root.solvePending = false
+    root.solveError = ""
   }
 
   function takeDetail(text) {
@@ -270,6 +280,117 @@ Item {
       root.pendingMove = null
       root.actionError = parsed && parsed.error ? parsed.error : "bin/shortcut gave no answer"
     }
+  }
+
+  // ---- Herdr. A story is handed to an agent in a workspace the user already
+  // has. The list is fetched when a story or the settings open, not on the poll.
+
+  property var workspaces: null
+  property bool loadingWorkspaces: false
+  property bool solving: false
+  property string solveError: ""
+  property bool solvePicking: false
+  property bool solveForceAsk: false
+  property bool solvePending: false
+
+  signal solveReadyToClose()
+
+  function refreshWorkspaces() {
+    if (spacesProc.running) return
+    root.loadingWorkspaces = true
+    spacesProc.command = [root.solveCli, "workspaces"]
+    spacesProc.running = true
+  }
+
+  function takeWorkspaces(text) {
+    root.loadingWorkspaces = false
+    var parsed = root.parse(text)
+    if (!parsed || parsed.ok !== true) {
+      root.workspaces = []
+      if (root.solvePending) {
+        root.solvePending = false
+        root.solvePicking = false
+        root.solveError = parsed && parsed.error ? parsed.error : "Herdr gave no answer"
+      }
+      return
+    }
+    root.workspaces = parsed.workspaces || []
+    if (root.solvePending) root.continueSolve()
+  }
+
+  // forceAsk opens the row even when a workspace is saved, so one story can
+  // go somewhere else without changing the setting.
+  function armSolve(forceAsk) {
+    if (!root.detail || root.solving) return
+    root.solveError = ""
+    root.solveForceAsk = !!forceAsk
+    root.solvePending = true
+    // An empty list is retried: the last fetch may have run before Herdr was up.
+    if (root.workspaces && root.workspaces.length && !root.loadingWorkspaces) {
+      root.continueSolve()
+      return
+    }
+    if (!root.loadingWorkspaces) root.refreshWorkspaces()
+  }
+
+  function continueSolve() {
+    if (!root.solvePending || !root.detail) return
+    root.solvePending = false
+    var target = Model.solveTarget(root.workspaces, Model.readSetting(root.settings, "solveWorkspace"))
+    if (root.solveForceAsk || target.ask) {
+      if (!root.workspaces || !root.workspaces.length) {
+        root.solvePicking = false
+        root.solveError = "Herdr has no workspaces yet"
+        return
+      }
+      // Drop it first so the detail page recomputes the highlight when the
+      // row was already open.
+      root.solvePicking = false
+      root.solvePicking = true
+      return
+    }
+    root.launchSolve(target.workspace, Model.readSetting(root.settings, "solveWorktree"))
+  }
+
+  function launchSolve(workspace, worktree) {
+    if (!workspace || !root.detail || root.solving || solveProc.running) return
+    var raw = root.detail
+    root.solvePicking = false
+    root.solveError = ""
+    root.solving = true
+    solveProc.body = JSON.stringify({
+      workspaceId: String(workspace.id || ""),
+      cwd: String(workspace.cwd || ""),
+      worktree: !!worktree,
+      kind: Model.readSetting(root.settings, "agentKind"),
+      agent: Model.solveAgentName(raw.id),
+      branch: Model.solveBranch(raw.id),
+      prompt: Model.solvePrompt(raw, root.refs, !!worktree)
+    })
+    solveProc.running = true
+  }
+
+  function takeSolve(text) {
+    root.solving = false
+    var parsed = root.parse(text)
+    if (!parsed || parsed.ok !== true) {
+      root.solveError = parsed && parsed.error ? parsed.error : "Herdr gave no answer"
+      return
+    }
+    root.solveError = ""
+    root.solvePicking = false
+    if (parsed.focused === true) {
+      root.solveReadyToClose()
+      return
+    }
+    root.solveError = parsed.status === "blocked"
+      ? "Herdr is waiting for an answer"
+      : "The agent is in Herdr"
+  }
+
+  function cancelSolvePick() {
+    root.solvePicking = false
+    root.solvePending = false
   }
 
   // ---- What the bar widget reads.
@@ -421,6 +542,26 @@ Item {
     id: moveProc
     environment: root.cliEnvironment
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.takeMove(text) }
+  }
+
+  Process {
+    id: spacesProc
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.takeWorkspaces(text) }
+  }
+
+  // The story goes in on stdin, same as create: the prompt is the description
+  // and the comments, and argv would put that text where ps can read it.
+  Process {
+    id: solveProc
+    property string body: "{}"
+    command: [root.solveCli, "start"]
+    stdinEnabled: true
+    onStarted: {
+      write(solveProc.body)
+      solveProc.body = "{}"
+      stdinEnabled = false
+    }
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.takeSolve(text) }
   }
 
   // ---- Timers.
