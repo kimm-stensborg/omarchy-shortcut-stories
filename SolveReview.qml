@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Controls as QQC
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
@@ -30,15 +31,33 @@ Item {
   readonly property bool worktree: view.store
     ? Model.readSetting(view.store.settings, "solveWorktree") === true : false
   readonly property var workspaces: view.store && view.store.workspaces ? view.store.workspaces : []
-  readonly property string prompt: view.raw ? Model.solvePrompt(view.raw, view.refs, view.worktree) : ""
+  // The generated prompt, until it is edited. After that the field is what
+  // gets sent, and toggling the worktree no longer rewrites it.
+  property bool promptEdited: false
+  property bool syncingPrompt: false
+  property string promptDraft: ""
 
   property int cursor: 0
+
+  function generatedPrompt() {
+    return view.raw ? Model.solvePrompt(view.raw, view.refs, view.worktree) : ""
+  }
+
+  function adoptPrompt() {
+    if (view.promptEdited) return
+    var next = view.generatedPrompt()
+    view.syncingPrompt = true
+    view.promptDraft = next
+    if (promptArea) promptArea.text = next
+    view.syncingPrompt = false
+  }
 
   function takeFocus() { keys.forceActiveFocus() }
 
   function escapePressed() {
-    if (view.solving || !view.store) return view.solving
-    view.store.closeSolveReview()
+    if (view.solving) return true
+    if (promptArea.activeFocus) { keys.forceActiveFocus(); return true }
+    if (view.store) view.store.closeSolveReview()
     return true
   }
 
@@ -54,6 +73,7 @@ Item {
         if (list[i].id === want.id) { at = i; break }
     }
     view.cursor = at
+    view.adoptPrompt()
   }
 
   function selectedWorkspace() {
@@ -70,17 +90,22 @@ Item {
 
   function start() {
     var workspace = view.selectedWorkspace()
-    if (view.store && workspace) view.store.launchSolve(workspace, view.worktree)
+    var text = view.promptDraft.replace(/\s+$/, "")
+    if (view.store && workspace && text !== "") view.store.launchSolve(workspace, view.worktree, text)
   }
+
+  onWorktreeChanged: view.adoptPrompt()
+  onRawChanged: view.adoptPrompt()
 
   function revealWorkspace(item) {
     if (!item || workspaceScroll.width <= 0) return
     var maxX = Math.max(0, workspaceScroll.contentWidth - workspaceScroll.width)
     var margin = Style.spacing.sm
+    var left = workspaceRow.x + item.x
     var x = workspaceScroll.contentX
-    if (item.x - margin < x) x = item.x - margin
-    else if (item.x + item.width + margin > x + workspaceScroll.width)
-      x = item.x + item.width + margin - workspaceScroll.width
+    if (left - margin < x) x = left - margin
+    else if (left + item.width + margin > x + workspaceScroll.width)
+      x = left + item.width + margin - workspaceScroll.width
     workspaceScroll.contentX = Math.max(0, Math.min(maxX, x))
   }
 
@@ -96,6 +121,13 @@ Item {
       if (view.solving) { event.accepted = true; return }
       var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
       var alt = (event.modifiers & Qt.AltModifier) !== 0
+      if (ctrl && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
+        view.start()
+        event.accepted = true
+        return
+      }
+      // Inside the prompt, the keys are text. Enter is a new line there.
+      if (promptArea.activeFocus) return
       if (event.key === Qt.Key_Left) {
         view.cursor = Math.max(0, view.cursor - 1)
         event.accepted = true
@@ -140,7 +172,7 @@ Item {
 
         Button {
           bordered: true
-          enabled: !view.solving && !!view.selectedWorkspace()
+          enabled: !view.solving && !!view.selectedWorkspace() && view.promptDraft.replace(/\s+$/, "") !== ""
           text: view.solving ? "Starting..." : "Start"
           foreground: view.accent
           fontFamily: view.fontFamily
@@ -215,11 +247,13 @@ Item {
         Flickable {
           id: workspaceScroll
           Layout.fillWidth: true
-          Layout.preferredHeight: workspaceRow.implicitHeight
+          // The chip border is painted on the edge of the button. A flickable
+          // clipped to that exact height cuts the top stroke off.
+          Layout.preferredHeight: workspaceRow.implicitHeight + 8
           clip: true
           flickableDirection: Flickable.HorizontalFlick
-          contentWidth: workspaceRow.implicitWidth
-          contentHeight: workspaceRow.implicitHeight
+          contentWidth: workspaceRow.implicitWidth + 8
+          contentHeight: workspaceRow.implicitHeight + 8
           boundsBehavior: Flickable.StopAtBounds
 
           WheelHandler {
@@ -233,6 +267,8 @@ Item {
 
           Row {
             id: workspaceRow
+            x: 4
+            y: 4
             spacing: Style.spacing.controlGap
 
             Repeater {
@@ -243,13 +279,12 @@ Item {
                 required property var modelData
                 required property int index
                 readonly property bool picked: index === view.cursor
-                bordered: picked
+                bordered: true
                 text: modelData.label || modelData.id
                 foreground: picked ? view.accent : view.muted
                 fontFamily: view.fontFamily
                 fontSize: Style.font.caption
                 horizontalPadding: Style.space(8)
-                verticalPadding: Style.space(3)
                 onClicked: view.cursor = index
                 onPickedChanged: if (picked) Qt.callLater(function() { view.revealWorkspace(repoChip) })
                 onXChanged: if (picked) Qt.callLater(function() { view.revealWorkspace(repoChip) })
@@ -302,24 +337,26 @@ Item {
         font.pixelSize: Style.font.caption
       }
 
-      Flickable {
-        id: promptFlick
+      QQC.ScrollView {
         Layout.fillWidth: true
         Layout.fillHeight: true
         clip: true
-        contentWidth: width
-        contentHeight: promptText.implicitHeight
-        boundsBehavior: Flickable.StopAtBounds
 
-        Text {
-          id: promptText
-          width: promptFlick.width
-          wrapMode: Text.Wrap
-          textFormat: Text.PlainText
-          text: view.prompt
+        QQC.TextArea {
+          id: promptArea
+          placeholderText: "What the agent is asked to do"
+          wrapMode: TextEdit.Wrap
           color: view.foreground
+          placeholderTextColor: view.muted
+          selectionColor: Style.selectionFillFor(view.foreground, view.accent)
           font.family: view.fontFamily
           font.pixelSize: Style.font.body
+          background: null
+          onTextChanged: {
+            if (view.syncingPrompt) return
+            view.promptEdited = true
+            view.promptDraft = text
+          }
         }
       }
     }

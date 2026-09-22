@@ -361,7 +361,7 @@ Item {
     if (root.store && root.store.solveError && root.mode === "mine" && root.storyOpen)
       return root.store.solveError
     if (root.mode === "mine" && root.storyOpen && root.store && root.store.solveReview)
-      return "Enter starts · ← → workspace · W a worktree · Esc back"
+      return "Enter starts · Ctrl+Enter from the prompt · ← → workspace · W a worktree · Esc back"
     if (root.mode === "mine" && root.storyOpen)
       return "Alt+A solves it · ← → pick a state · Enter moves it · Ctrl+O opens it · Esc back"
     if (root.mode === "mine")

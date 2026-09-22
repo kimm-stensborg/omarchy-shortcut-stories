@@ -194,8 +194,9 @@ worktree that already has the branch is opened rather than created. The
 checkout is left in place afterwards; Herdr is where you remove it.
 
 **Workspace**, **Worktree** and **Agent** live in the settings, and again on
-that screen. `←` `→` pick a workspace, `W` toggles a worktree, `Enter` starts,
-`Esc` goes back to the story. A saved workspace is already selected. A story
+that screen. `←` `→` pick a workspace, `W` toggles a worktree, and the prompt can be
+rewritten before `Enter` starts. Inside the prompt, `Enter` is a new line
+and `Ctrl+Enter` starts. `Esc` goes back to the story. A saved workspace is already selected. A story
 that names exactly one workspace has that one selected instead, when none is
 saved.
 

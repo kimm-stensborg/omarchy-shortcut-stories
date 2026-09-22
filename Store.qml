@@ -341,9 +341,11 @@ Item {
     root.solveReview = true
   }
 
-  function launchSolve(workspace, worktree) {
+  function launchSolve(workspace, worktree, prompt) {
     if (!workspace || !root.detail || root.solving || solveProc.running) return
     var raw = root.detail
+    var text = prompt !== undefined && prompt !== null && String(prompt) !== ""
+      ? String(prompt) : Model.solvePrompt(raw, root.refs, !!worktree)
     root.solveError = ""
     root.solving = true
     solveProc.body = JSON.stringify({
@@ -353,7 +355,7 @@ Item {
       kind: Model.readSetting(root.settings, "agentKind"),
       agent: Model.solveAgentName(raw.id),
       branch: Model.solveBranch(raw.id),
-      prompt: Model.solvePrompt(raw, root.refs, !!worktree)
+      prompt: text
     })
     solveProc.running = true
   }
