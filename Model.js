@@ -544,48 +544,60 @@ function relativeTime(iso, nowSeconds) {
 // reads that one; test.sh asserts the two agree.
 
 var SETTINGS = [
-  { title: "New stories", rows: [
+  { title: "New story", rows: [
     // `picker` rows take their options from the workspace rather than from
     // this file, so the list is whatever your teams and sprints actually are.
-    { key: "defaultTeam", kind: "picker", source: "teams", label: "Team", fallback: "",
-      hint: "The team a new story starts on" },
+    { key: "defaultTeam", kind: "picker", source: "teams", label: "Team", fallback: "" },
     { key: "defaultIteration", kind: "picker", source: "iterations", label: "Iteration", fallback: "",
-      hint: "A sprint by name, or whichever one today falls inside" },
+      hint: "A named sprint, or the one today falls inside" },
     { key: "defaultOwner", kind: "picker", source: "members", label: "Owner", fallback: "me" },
     { key: "defaultType", kind: "choice", label: "Type", fallback: "feature",
       options: [{ value: "feature", label: "Feature" }, { value: "bug", label: "Bug" },
                 { value: "chore", label: "Chore" }] },
     { key: "stickyFields", kind: "toggle", label: "Keep team and iteration after filing", fallback: true }
   ]},
-  { title: "In the bar", rows: [
-    { key: "barLabel", kind: "choice", label: "Next to the glyph", fallback: "count",
-      options: [{ value: "none", label: "Nothing" }, { value: "count", label: "Open stories" },
-                { value: "started", label: "In progress" }] }
-  ]},
-  { title: "In the panel", rows: [
+  { title: "Stories", rows: [
     { key: "defaultMode", kind: "choice", label: "Opens on", fallback: "compose",
       options: [{ value: "compose", label: "New story" }, { value: "mine", label: "My stories" }] },
-    { key: "showDone", kind: "toggle", label: "Show finished stories", fallback: false },
-    { key: "listScope", kind: "choice", label: "Stories", fallback: "all",
+    { key: "listScope", kind: "choice", label: "Show", fallback: "all",
       options: [{ value: "all", label: "Everything assigned to me" },
-                { value: "current", label: "The current sprint" }] }
+                { value: "current", label: "The current sprint" }] },
+    { key: "showDone", kind: "toggle", label: "Show finished stories", fallback: false }
   ]},
-  { title: "Solving", rows: [
+  { title: "Solve", rows: [
     { key: "solveWorkspace", kind: "picker", source: "workspaces", label: "Workspace", fallback: "",
-      hint: "Where Solve starts an agent. Empty asks each time" },
-    { key: "solveWorktree", kind: "toggle", label: "Solve in a worktree", fallback: false },
+      hint: "Empty asks each time" },
+    { key: "solveWorktree", kind: "toggle", label: "In a worktree", fallback: false },
     { key: "agentKind", kind: "choice", label: "Agent", fallback: "grok",
       options: [{ value: "grok", label: "Grok" }, { value: "claude", label: "Claude" },
                 { value: "codex", label: "Codex" }, { value: "cursor", label: "Cursor" },
                 { value: "opencode", label: "OpenCode" }] }
   ]},
-  { title: "Data", rows: [
+  { title: "Bar", rows: [
+    { key: "barLabel", kind: "choice", label: "Next to the glyph", fallback: "count",
+      options: [{ value: "none", label: "Nothing" }, { value: "count", label: "Open stories" },
+                { value: "started", label: "In progress" }] },
     { key: "refreshMinutes", kind: "number", label: "Refresh while closed (minutes)",
-      fallback: 5, min: 1, max: 60 },
+      fallback: 5, min: 1, max: 60 }
+  ]},
+  { title: "Shortcut", rows: [
     { key: "demo", kind: "toggle", label: "Demo workspace", fallback: false,
       hint: "A made-up workspace; never calls Shortcut" }
   ]}
 ]
+
+// The settings page. New story beside Solve, then the list beside the bar.
+// Shortcut sits under the bar: it is the one switch that is not part of either.
+function settingsPage() {
+  var order = [["New story", "Stories"], ["Solve", "Bar", "Shortcut"]]
+  return order.map(function(names) {
+    return names.map(function(name) {
+      for (var i = 0; i < SETTINGS.length; i++)
+        if (SETTINGS[i].title === name) return SETTINGS[i]
+      return null
+    }).filter(function(section) { return section })
+  })
+}
 
 // What a picker row offers. The values are what get stored, so they have to
 // survive a workspace that changes underneath them: "me" and "current" are
@@ -1062,10 +1074,12 @@ function solveCaption(workspace, worktree, storyId) {
   return name ? "New tab in " + name : "New tab"
 }
 
-// What the bar shows next to the glyph.
-function barLabel(stories, refs, mode) {
+// What the bar shows next to the glyph. The same list the panel is showing:
+// the current sprint when that filter is on, otherwise everything assigned.
+function barLabel(stories, refs, mode, scope, todayIso) {
   if (mode === "none") return ""
-  var n = mode === "started" ? startedCount(stories, refs) : openCount(stories, refs)
+  var list = storiesInScope(stories, refs, scope, todayIso)
+  var n = mode === "started" ? startedCount(list, refs) : openCount(list, refs)
   return n ? String(n) : ""
 }
 
@@ -1090,7 +1104,7 @@ if (typeof module !== "undefined") {
     storiesInScope: storiesInScope,
     applyMove: applyMove,
     prependCreated: prependCreated, relativeTime: relativeTime,
-    SETTINGS: SETTINGS, settingRow: settingRow, choiceList: choiceList,
+    SETTINGS: SETTINGS, settingsPage: settingsPage, settingRow: settingRow, choiceList: choiceList,
     coerceSetting: coerceSetting, readSetting: readSetting,
     isDefaultSetting: isDefaultSetting, nextEntry: nextEntry,
     hasCustomSettings: hasCustomSettings, toggleChoice: toggleChoice,

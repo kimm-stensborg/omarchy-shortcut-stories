@@ -46,25 +46,40 @@ Column {
     root.focusReleased()
   }
 
-  spacing: Style.space(20)
+  spacing: Style.space(12)
 
   Repeater {
     model: root.sections
 
-    Column {
-      id: section
+    Item {
+      id: block
       required property var modelData
       width: root.width
+      implicitHeight: section.implicitHeight + Style.space(14) * 2
+      height: implicitHeight
+
+      Rectangle {
+        anchors.fill: parent
+        radius: Style.cornerRadius
+        color: Qt.rgba(root.fg.r, root.fg.g, root.fg.b, 0.06)
+      }
+
+      Column {
+      id: section
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.top: parent.top
+      anchors.margins: Style.space(14)
       spacing: Style.space(10)
 
       PanelSectionHeader {
-        text: String(section.modelData.title).toUpperCase()
+        text: String(block.modelData.title).toUpperCase()
         foreground: root.fg
         fontFamily: root.fontFamily
       }
 
       Repeater {
-        model: section.modelData.rows
+        model: block.modelData.rows
 
         Column {
           id: setting
@@ -302,6 +317,7 @@ Column {
             }
           }
         }
+      }
       }
     }
   }

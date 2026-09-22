@@ -69,13 +69,7 @@ Item {
 
   function takeFocus() { keys.forceActiveFocus() }
 
-  function escapePressed() {
-    if (view.picking && view.store) {
-      view.store.cancelSolvePick()
-      return true
-    }
-    return false
-  }
+  function escapePressed() { return false }
 
   function moveTo(stateId) {
     if (!view.store || !view.detail) return
@@ -88,55 +82,6 @@ Item {
       Quickshell.execDetached(["omarchy-launch-browser", view.detail.appUrl])
   }
 
-  // The repo row. Arrows pick a workspace; W is the worktree, and only the
-  // ask-each-time path remembers that, so a one-off repo leaves the setting.
-  readonly property bool picking: !!(view.store && view.store.solvePicking)
-  readonly property bool solving: !!(view.store && view.store.solving)
-  property bool pickWorktree: false
-  property int pickCursor: 0
-
-  function preparePick() {
-    if (!view.store) return
-    var list = view.store.workspaces || []
-    view.pickWorktree = Model.readSetting(view.store.settings, "solveWorktree") === true
-    var saved = Model.workspaceByLabel(list, Model.readSetting(view.store.settings, "solveWorkspace"))
-    var hinted = view.store.detail
-      ? Model.suggestWorkspace(list, Model.solveHaystack(view.store.detail))
-      : null
-    var want = view.store.solveForceAsk && saved ? saved : (hinted || saved)
-    var at = 0
-    if (want) {
-      for (var i = 0; i < list.length; i++)
-        if (list[i].id === want.id) { at = i; break }
-    }
-    view.pickCursor = at
-  }
-
-  onPickingChanged: if (view.picking) view.preparePick()
-
-  function togglePickWorktree() {
-    view.pickWorktree = !view.pickWorktree
-    if (view.store && !view.store.solveForceAsk)
-      view.store.persist("solveWorktree", view.pickWorktree)
-  }
-
-  function launchPick(index) {
-    if (!view.store) return
-    var list = view.store.workspaces || []
-    if (list[index]) view.store.launchSolve(list[index], view.pickWorktree)
-  }
-
-  function revealPick(item) {
-    if (!item || pickScroll.width <= 0) return
-    var maxX = Math.max(0, pickScroll.contentWidth - pickScroll.width)
-    var margin = Style.spacing.sm
-    var x = pickScroll.contentX
-    if (item.x - margin < x) x = item.x - margin
-    else if (item.x + item.width + margin > x + pickScroll.width)
-      x = item.x + item.width + margin - pickScroll.width
-    pickScroll.contentX = Math.max(0, Math.min(maxX, x))
-  }
-
   Item {
     id: keys
     anchors.fill: parent
@@ -146,29 +91,10 @@ Item {
     Keys.onPressed: function(event) {
       var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
       var alt = (event.modifiers & Qt.AltModifier) !== 0
-      var shift = (event.modifiers & Qt.ShiftModifier) !== 0
       if (ctrl && event.key === Qt.Key_O) { view.openInBrowser(); event.accepted = true; return }
       if (alt && event.key === Qt.Key_A) {
-        if (view.store) view.store.armSolve(shift)
+        if (view.store) view.store.armSolve()
         event.accepted = true
-        return
-      }
-      if (view.solving) { event.accepted = true; return }
-      if (view.picking) {
-        var list = view.store ? (view.store.workspaces || []) : []
-        if (event.key === Qt.Key_Left) {
-          view.pickCursor = Math.max(0, view.pickCursor - 1)
-          event.accepted = true
-        } else if (event.key === Qt.Key_Right) {
-          view.pickCursor = Math.min(Math.max(0, list.length - 1), view.pickCursor + 1)
-          event.accepted = true
-        } else if (event.key === Qt.Key_W && !ctrl && !alt) {
-          view.togglePickWorktree()
-          event.accepted = true
-        } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-          view.launchPick(view.pickCursor)
-          event.accepted = true
-        }
         return
       }
       if (!view.moveStates.length) return
@@ -237,12 +163,11 @@ Item {
         Button {
           visible: !!view.detail
           bordered: true
-          enabled: !view.solving
-          text: view.solving ? "Starting..." : "Solve"
-          tooltipText: "Hand it to an agent in Herdr (Alt+A)"
+          text: "Solve"
+          tooltipText: "Review the prompt, then start an agent (Alt+A)"
           foreground: view.accent
           fontFamily: view.fontFamily
-          onClicked: if (view.store) view.store.armSolve(false)
+          onClicked: if (view.store) view.store.armSolve()
         }
       }
 
@@ -455,92 +380,6 @@ Item {
                     Quickshell.execDetached(["omarchy-launch-browser", link])
                   }
                 }
-              }
-            }
-          }
-        }
-      }
-
-      PanelSeparator { Layout.fillWidth: true; visible: view.picking }
-
-      // ---- Where the agent starts. Same shape as the move strip: one row,
-      // arrows, the one you are on stays in view. It only appears when no
-      // workspace is saved, or when this one story should go somewhere else.
-      ColumnLayout {
-        Layout.fillWidth: true
-        visible: view.picking
-        spacing: Style.spacing.sm
-
-        RowLayout {
-          Layout.fillWidth: true
-          spacing: Style.spacing.md
-
-          Button {
-            bordered: view.pickWorktree
-            text: "Worktree"
-            fontSize: Style.font.caption
-            foreground: view.pickWorktree ? view.accent : view.muted
-            fontFamily: view.fontFamily
-            horizontalPadding: Style.space(8)
-            verticalPadding: Style.space(3)
-            onClicked: view.togglePickWorktree()
-          }
-
-          Text {
-            Layout.fillWidth: true
-            elide: Text.ElideRight
-            text: Model.solveCaption(
-              (view.store && view.store.workspaces)
-                ? view.store.workspaces[view.pickCursor] : null,
-              view.pickWorktree,
-              view.detail ? view.detail.id : null)
-            color: view.muted
-            font.family: view.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-        }
-
-        Flickable {
-          id: pickScroll
-          Layout.fillWidth: true
-          Layout.preferredHeight: pickRow.implicitHeight
-          clip: true
-          flickableDirection: Flickable.HorizontalFlick
-          contentWidth: pickRow.implicitWidth
-          contentHeight: pickRow.implicitHeight
-          boundsBehavior: Flickable.StopAtBounds
-
-          WheelHandler {
-            onWheel: function(wheel) {
-              var delta = wheel.angleDelta.x !== 0 ? wheel.angleDelta.x : wheel.angleDelta.y
-              var maxX = Math.max(0, pickScroll.contentWidth - pickScroll.width)
-              pickScroll.contentX = Math.max(0, Math.min(maxX, pickScroll.contentX - delta * 0.6))
-              wheel.accepted = true
-            }
-          }
-
-          Row {
-            id: pickRow
-            spacing: Style.spacing.controlGap
-
-            Repeater {
-              model: view.store ? (view.store.workspaces || []) : []
-              delegate: Button {
-                id: repoChip
-                required property var modelData
-                required property int index
-                readonly property bool picked: index === view.pickCursor
-                bordered: picked
-                text: modelData.label || modelData.id
-                foreground: picked ? view.accent : view.muted
-                fontFamily: view.fontFamily
-                fontSize: Style.font.caption
-                horizontalPadding: Style.space(8)
-                verticalPadding: Style.space(3)
-                onClicked: view.launchPick(index)
-                onPickedChanged: if (picked) Qt.callLater(function() { view.revealPick(repoChip) })
-                onXChanged: if (picked) Qt.callLater(function() { view.revealPick(repoChip) })
-                Component.onCompleted: if (picked) Qt.callLater(function() { view.revealPick(repoChip) })
               }
             }
           }

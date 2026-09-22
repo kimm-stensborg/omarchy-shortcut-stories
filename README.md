@@ -48,10 +48,11 @@ To put the count in the bar as well:
 omarchy bar put io.github.kimm-stensborg.shortcut-stories --section right
 ```
 
-The icon carries a small badge when a story has been assigned to you since
-you last opened it. Opening the story clears that one. The stories already
-assigned the first time the plugin looks are not new, so the badge starts
-clear. Hovering the icon does not list them.
+The number beside the icon is the same one as **My stories**, so it follows
+the list filter. The icon carries a small badge when a story has been
+assigned to you since you last opened it. Opening the story clears that one.
+The stories already assigned the first time the plugin looks are not new, so
+the badge starts clear. Hovering the icon does not list them.
 
 ### Your token
 
@@ -181,9 +182,10 @@ The story moves the moment you pick, and moves back if Shortcut refuses.
 
 ## Solving a story
 
-`Alt+A`, or **Solve** beside Open, hands the open story to a coding agent in
-[Herdr](https://herdr.dev). Herdr keeps the terminal. The panel starts the
-agent, gives it the story, and closes, so the keyboard is Herdr's.
+`Alt+A`, or **Solve** beside Open, opens a screen with the prompt, the agent,
+the workspace and whether it runs in a worktree. Enter starts it. Herdr keeps
+the terminal. The panel closes once the agent has the story, so the keyboard
+is Herdr's.
 
 The agent is a new tab, or a new git worktree on a branch named `sc-<id>`.
 Nothing is typed into a pane that is already running. If an agent for that
@@ -191,13 +193,11 @@ story is already up, Solve focuses it and does not send the story again. A
 worktree that already has the branch is opened rather than created. The
 checkout is left in place afterwards; Herdr is where you remove it.
 
-**Workspace**, **Worktree** and **Agent** live in the settings. A workspace
-name means `Alt+A` starts there without asking. Empty means Solve opens a row
-of the workspaces Herdr already has: `←` `→` pick one, `W` toggles a worktree
-and remembers it, `Enter` starts, `Esc` stays on the story. `Alt+Shift+A`
-opens that row even when a workspace is saved, and that choice is only for
-this story. A story that names exactly one of those workspaces has it
-highlighted.
+**Workspace**, **Worktree** and **Agent** live in the settings, and again on
+that screen. `←` `→` pick a workspace, `W` toggles a worktree, `Enter` starts,
+`Esc` goes back to the story. A saved workspace is already selected. A story
+that names exactly one workspace has that one selected instead, when none is
+saved.
 
 The agent is told the title, the link, the description, the tasks and the
 comments, and to leave the Shortcut story where it is and not to push. In the
@@ -209,8 +209,9 @@ unchanged.
 
 ## Settings
 
-`Ctrl + ,`, or the gear. Changes apply as you make them; there is no Save. A
-dot marks an option that is no longer the default.
+`Ctrl + ,`, or the gear. The page is grouped: a new story, the list, Solve,
+and the bar. Changes apply as you make them; there is no Save. A dot marks
+an option that is no longer the default.
 
 **Team**, **Iteration** and **Owner** are filled from your workspace, so you
 pick a real team and a real sprint rather than typing a name and hoping. Set
@@ -231,12 +232,12 @@ rather than going stale when this one ends.
 | Owner | Me | Who a new story is assigned to |
 | Type | Feature | What a new story starts as |
 | Keep team and iteration after filing | on | Leaves them set for the next story |
-| Next to the glyph | Open stories | What the bar shows: nothing, the count, or how many are in progress |
+| Next to the glyph | Open stories | The same number as My stories, or how many of those are in progress |
 | Opens on | New story | Which pane the keybinding lands on |
 | Show finished stories | off | Keeps done stories in the list |
-| Stories | Everything assigned to me | The list, or only the sprint today falls inside |
+| Show | Everything assigned to me | The list, or only the sprint today falls inside |
 | Workspace | Ask each time | The Herdr workspace Solve starts in |
-| Solve in a worktree | off | Solve checks the story out beside the repo, on `sc-<id>` |
+| In a worktree | off | Solve checks the story out beside the repo, on `sc-<id>` |
 | Agent | Grok | Which coding agent Solve starts |
 | Refresh while closed | 5 min | How often the count is brought up to date |
 | Demo workspace | off | A made-up workspace; never calls Shortcut |
@@ -303,7 +304,8 @@ newlines and `$` in it survives.
 | `Overlay.qml` | The card, the mode switch and the key handling |
 | `ComposePane.qml` | The new-story form |
 | `StoriesPane.qml` | The stories assigned to you |
-| `StoryDetail.qml` | One story opened up: description, tasks, comments, where it can move, and Solve |
+| `StoryDetail.qml` | One story opened up: description, tasks, comments, and where it can move |
+| `SolveReview.qml` | The prompt, agent, workspace and worktree before Solve starts |
 | `SettingsPane.qml`, `SettingsColumn.qml` | The settings page |
 | `BarWidget.qml` | The glyph, the count, and the badge for stories you have not opened |
 | `install.sh` | Enables the plugin and binds a key |

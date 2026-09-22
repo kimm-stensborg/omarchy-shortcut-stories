@@ -222,7 +222,7 @@ Item {
     root.detail = null
     root.detailError = ""
     root.solveError = ""
-    root.solvePicking = false
+    root.solveReview = false
     root.solvePending = false
     root.loadingDetail = true
     root.refreshWorkspaces()
@@ -234,7 +234,7 @@ Item {
     root.detailFor = 0
     root.detail = null
     root.detailError = ""
-    root.solvePicking = false
+    root.solveReview = false
     root.solvePending = false
     root.solveError = ""
   }
@@ -289,8 +289,7 @@ Item {
   property bool loadingWorkspaces: false
   property bool solving: false
   property string solveError: ""
-  property bool solvePicking: false
-  property bool solveForceAsk: false
+  property bool solveReview: false
   property bool solvePending: false
 
   signal solveReadyToClose()
@@ -309,7 +308,7 @@ Item {
       root.workspaces = []
       if (root.solvePending) {
         root.solvePending = false
-        root.solvePicking = false
+        root.solveReview = false
         root.solveError = parsed && parsed.error ? parsed.error : "Herdr gave no answer"
       }
       return
@@ -318,12 +317,10 @@ Item {
     if (root.solvePending) root.continueSolve()
   }
 
-  // forceAsk opens the row even when a workspace is saved, so one story can
-  // go somewhere else without changing the setting.
-  function armSolve(forceAsk) {
+  // Opens the review. Nothing is started until that screen says so.
+  function armSolve() {
     if (!root.detail || root.solving) return
     root.solveError = ""
-    root.solveForceAsk = !!forceAsk
     root.solvePending = true
     // An empty list is retried: the last fetch may have run before Herdr was up.
     if (root.workspaces && root.workspaces.length && !root.loadingWorkspaces) {
@@ -336,26 +333,17 @@ Item {
   function continueSolve() {
     if (!root.solvePending || !root.detail) return
     root.solvePending = false
-    var target = Model.solveTarget(root.workspaces, Model.readSetting(root.settings, "solveWorkspace"))
-    if (root.solveForceAsk || target.ask) {
-      if (!root.workspaces || !root.workspaces.length) {
-        root.solvePicking = false
-        root.solveError = "Herdr has no workspaces yet"
-        return
-      }
-      // Drop it first so the detail page recomputes the highlight when the
-      // row was already open.
-      root.solvePicking = false
-      root.solvePicking = true
+    if (!root.workspaces || !root.workspaces.length) {
+      root.solveReview = false
+      root.solveError = "Herdr has no workspaces yet"
       return
     }
-    root.launchSolve(target.workspace, Model.readSetting(root.settings, "solveWorktree"))
+    root.solveReview = true
   }
 
   function launchSolve(workspace, worktree) {
     if (!workspace || !root.detail || root.solving || solveProc.running) return
     var raw = root.detail
-    root.solvePicking = false
     root.solveError = ""
     root.solving = true
     solveProc.body = JSON.stringify({
@@ -378,8 +366,8 @@ Item {
       return
     }
     root.solveError = ""
-    root.solvePicking = false
     if (parsed.focused === true) {
+      root.solveReview = false
       root.solveReadyToClose()
       return
     }
@@ -388,9 +376,10 @@ Item {
       : "The agent is in Herdr"
   }
 
-  function cancelSolvePick() {
-    root.solvePicking = false
+  function closeSolveReview() {
+    root.solveReview = false
     root.solvePending = false
+    root.solveError = ""
   }
 
   // ---- What the bar widget reads.
@@ -436,8 +425,13 @@ Item {
       root.remember(root.stories, [])
       unseen = Model.unseenCount(root.stories, root.seenIds)
     }
-    var open = Model.openCount(root.stories, root.refs)
-    var started = Model.startedCount(root.stories, root.refs)
+    // The number beside the icon is the number on My stories, so it follows
+    // the same filter the list is using.
+    var today = new Date().toISOString().slice(0, 10)
+    var scope = Model.readSetting(root.settings, "listScope")
+    var visible = Model.storiesInScope(root.stories, root.refs, scope, today)
+    var open = Model.openCount(visible, root.refs)
+    var started = Model.startedCount(visible, root.refs)
     var locked = !!(root.failure
       && (root.failure.code === "notoken" || root.failure.code === "auth"))
     statusFile.setText(JSON.stringify({
@@ -450,6 +444,7 @@ Item {
   onStoriesChanged: root.publishStatus()
   onRefsChanged: root.publishStatus()
   onFailureChanged: root.publishStatus()
+  onSettingsChanged: root.publishStatus()
 
   FileView {
     id: statusFile

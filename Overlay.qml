@@ -317,7 +317,8 @@ Item {
             sourceComponent: root.mode === "settings" ? settingsPane
               : (root.locked ? tokenPane
                 : (root.mode === "compose" ? composePane
-                  : (root.storyOpen ? detailPane : storiesPane)))
+                  : (root.storyOpen && root.store && root.store.solveReview ? solvePane
+                    : (root.storyOpen ? detailPane : storiesPane))))
             onLoaded: Qt.callLater(function() { root.focusPane() })
           }
 
@@ -359,13 +360,10 @@ Item {
       return "Starting the agent in Herdr…"
     if (root.store && root.store.solveError && root.mode === "mine" && root.storyOpen)
       return root.store.solveError
-    if (root.mode === "mine" && root.storyOpen && root.store && root.store.solvePicking)
-      return "← → pick a repo · W a worktree · Enter starts · Esc stays on the story"
-    if (root.mode === "mine" && root.storyOpen) {
-      var where = Model.readSetting(root.settings, "solveWorkspace")
-      var solve = where !== "" ? "Alt+A solves in " + where : "Alt+A solves it"
-      return solve + " · Alt+Shift+A picks a repo · ← → pick a state · Enter moves it · Ctrl+O opens it · Esc back"
-    }
+    if (root.mode === "mine" && root.storyOpen && root.store && root.store.solveReview)
+      return "Enter starts · ← → workspace · W a worktree · Esc back"
+    if (root.mode === "mine" && root.storyOpen)
+      return "Alt+A solves it · ← → pick a state · Enter moves it · Ctrl+O opens it · Esc back"
     if (root.mode === "mine")
       return "Enter opens a story · Alt+I the current sprint · Ctrl+O in your browser · Esc closes"
     return "Ctrl+R refreshes · Alt+1 a new story · Esc closes"
@@ -385,6 +383,11 @@ Item {
     target: root.store
     function onSolveReadyToClose() { root.dismiss() }
   }
+
+  Component { id: solvePane; SolveReview {
+    overlay: root
+    store: root.store
+  } }
 
   Component { id: detailPane; StoryDetail {
     overlay: root

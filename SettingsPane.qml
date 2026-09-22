@@ -21,12 +21,10 @@ Item {
   readonly property color accent: pane.overlay ? pane.overlay.accent : Color.accent
   readonly property string fontFamily: pane.overlay ? pane.overlay.fontFamily : Style.font.menuFamily
 
-  // Two columns above this width, one below, so every option is on screen at
-  // once rather than behind a scroll.
-  readonly property int columnCount: pane.width >= Style.space(620) ? 2 : 1
-  readonly property var columns: Model.settingsColumns(pane.columnCount)
-
   property bool editing: false
+
+  // New story beside Solve, then the list beside the bar.
+  readonly property var pageColumns: Model.settingsPage()
 
   function takeFocus() { keys.forceActiveFocus() }
 
@@ -69,27 +67,31 @@ Item {
         }
       }
 
+      // Widths come from this flickable, not from its content item. Binding a
+      // column to parent.width there made the content item and the column
+      // size each other, and a whole group slipped off the side of the card.
       Flickable {
+        id: settingsFlick
         Layout.fillWidth: true
         Layout.fillHeight: true
         clip: true
-        contentHeight: columnsRow.implicitHeight
-        interactive: contentHeight > height
+        contentWidth: width
+        contentHeight: pageRow.implicitHeight
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.VerticalFlick
 
-        RowLayout {
-          id: columnsRow
-          width: parent.width
-          spacing: Style.spacing.xl
+        Row {
+          id: pageRow
+          width: settingsFlick.width
+          spacing: Style.spacing.lg
 
           Repeater {
-            model: pane.columns
+            model: 2
+
             SettingsColumn {
-              required property var modelData
-              Layout.fillWidth: true
-              Layout.alignment: Qt.AlignTop
-              width: parent ? parent.width / pane.columnCount : 0
-              spacing: Style.spacing.md
-              sections: modelData
+              required property int index
+              width: (pageRow.width - pageRow.spacing) / 2
+              sections: pane.pageColumns[index]
               values: pane.settings
               refs: pane.overlay ? pane.overlay.refs : null
               workspaces: pane.store ? pane.store.workspaces : null
