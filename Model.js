@@ -662,6 +662,26 @@ function linkChips(links, prUrl) {
   return out
 }
 
+// ---- undoing a move.
+// A move lands the moment you press Enter, so the footer says what just
+// happened and how to take it back, for a few seconds. move is
+// {id, from, to}: the story and the two state ids.
+
+function stateNameOf(refs, stateId) {
+  var found = findState(refs, stateId)
+  return found ? str(found.state.name) : "another state"
+}
+
+function moveNotice(refs, move) {
+  if (!move) return ""
+  return "Moved sc-" + str(move.id) + " to " + stateNameOf(refs, move.to) + " · Ctrl+Z moves it back"
+}
+
+function movedBackNotice(refs, move) {
+  if (!move) return ""
+  return "sc-" + str(move.id) + " is back in " + stateNameOf(refs, move.to)
+}
+
 // ---- the story list.
 
 function summarizeStory(story, refs) {
@@ -1701,6 +1721,7 @@ if (typeof module !== "undefined") {
     fileList: fileList, addFiles: addFiles, removeFile: removeFile, withScreenshots: withScreenshots,
     composeEscape: composeEscape, cameFrom: cameFrom,
     commonStateName: commonStateName, storyRows: storyRows, linkChips: linkChips,
+    moveNotice: moveNotice, movedBackNotice: movedBackNotice,
     editBase: editBase, buildUpdatePatch: buildUpdatePatch, resolveIterationSetting: resolveIterationSetting,
     SOLVE_PROMPT_LIMIT: SOLVE_PROMPT_LIMIT,
     solveAgentName: solveAgentName, solveBranch: solveBranch,

@@ -355,6 +355,13 @@ Item {
           var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
           var alt = (event.modifiers & Qt.AltModifier) !== 0
 
+          // A text field keeps Ctrl+Z for its own undo; only outside one does
+          // it take back the last move.
+          if (ctrl && event.key === Qt.Key_Z && root.store && root.store.lastMove) {
+            root.store.undoMove()
+            event.accepted = true; return
+          }
+
           if (ctrl && event.key === Qt.Key_R) {
             if (root.store) { root.store.refreshRefs(true); root.store.refreshStories() }
             event.accepted = true; return
@@ -468,6 +475,7 @@ Item {
     if (root.locked && root.mode !== "settings")
       return "A token unlocks the panel · Ctrl+, for settings · Esc closes"
     if (root.store && root.store.actionError) return root.store.actionError
+    if (root.store && root.store.notice) return root.store.notice
     if (root.failure && !root.locked) return root.failure.error
     if (root.store && root.store.stale) return "Showing reference data from earlier — Ctrl+R to retry"
     if (root.store && root.store.loadingPr)

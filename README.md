@@ -254,6 +254,8 @@ from a different workflow without complaint and quietly move the story to a
 board nobody on that team reads.
 
 The story moves the moment you pick, and moves back if Shortcut refuses.
+For a few seconds afterwards the footer says where it went, and `Ctrl + Z`
+moves it back -- an Enter pressed one state too far costs nothing.
 
 ## Solving a story
 

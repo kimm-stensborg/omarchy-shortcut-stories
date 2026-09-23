@@ -354,18 +354,43 @@ Item {
     }
   }
 
-  function moveStory(storyId, stateId) {
+  // undoing is true for the move Ctrl+Z makes, so that one is not itself
+  // offered for undoing.
+  function moveStory(storyId, stateId, undoing) {
     if (root.movingStory) return
     root.actionError = ""
     root.movingStory = storyId
+    // The state it came from: off the list, or off the open story when it
+    // is not in the list (one opened from the bar, say).
+    var before = storyStateOf(storyId)
+    if (before === null && root.detail && root.detail.id === storyId) before = root.detail.workflowStateId
     // Optimistic: the row moves now and is put back if Shortcut disagrees.
-    root.pendingMove = { id: storyId, before: storyStateOf(storyId) }
+    root.pendingMove = { id: storyId, before: before, after: stateId, undoing: !!undoing }
     root.stories = Model.applyMove(root.stories, storyId, stateId)
     moveProc.command = [root.cli, "move", String(storyId), String(stateId)]
     moveProc.running = true
   }
 
   property var pendingMove: null
+
+  // The last move, for Ctrl+Z, and the line the footer shows about it. Both
+  // go after a few seconds: an undo offered minutes later would move a
+  // story you have long since stopped thinking about.
+  property var lastMove: null
+  property string notice: ""
+
+  function undoMove() {
+    var move = root.lastMove
+    if (!move || root.movingStory) return
+    root.lastMove = null
+    root.moveStory(move.id, move.from, true)
+  }
+
+  Timer {
+    id: noticeTimer
+    interval: 8000
+    onTriggered: { root.notice = ""; root.lastMove = null }
+  }
 
   // ---- One story, opened.
 
@@ -432,8 +457,17 @@ Item {
     var parsed = parse(text)
     if (parsed && parsed.ok) {
       root.storyMoved(moved)
+      var done = root.pendingMove
       root.pendingMove = null
       root.suggestedState = null
+      if (done && done.undoing) {
+        root.lastMove = null
+        root.notice = Model.movedBackNotice(root.refs, { id: done.id, from: done.before, to: done.after })
+      } else if (done && done.before !== null && done.before !== undefined && done.before !== done.after) {
+        root.lastMove = { id: done.id, from: done.before, to: done.after }
+        root.notice = Model.moveNotice(root.refs, root.lastMove)
+      }
+      noticeTimer.restart()
       if (root.detail && root.detail.id === moved && parsed.story) {
         var next = {}
         for (var k in root.detail) next[k] = root.detail[k]

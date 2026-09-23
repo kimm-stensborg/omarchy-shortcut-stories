@@ -1286,6 +1286,14 @@ const cases = [
   ["or to the story that was open",       M.cameFrom("mine", 1234).storyId, 1234],
   ["or to the settings",                  M.cameFrom("settings", 1234).storyId, 0],
   ["opened straight onto the form, nowhere", M.cameFrom("compose", 0), null],
+  // undoing a move
+  ["a move says where it went and how back",
+    M.moveNotice(prRefs, {id: 7, from: 7001, to: 7002}), "Moved sc-7 to In Development · Ctrl+Z moves it back"],
+  ["and once moved back, where it is",
+    M.movedBackNotice(prRefs, {id: 7, from: 7002, to: 7001}), "sc-7 is back in Ready"],
+  ["no move, nothing to say",             M.moveNotice(prRefs, null), ""],
+  ["a state not in the cache is still said", M.moveNotice(prRefs, {id: 7, to: 1}), "Moved sc-7 to another state · Ctrl+Z moves it back"],
+
   // a story's other links
   ["a Figma link is labelled by its host",
     JSON.stringify(M.linkChips(["https://www.figma.com/file/xyz"], "")), '[{"url":"https://www.figma.com/file/xyz","label":"figma.com","github":false}]'],
