@@ -38,6 +38,10 @@ Item {
   readonly property string today: new Date().toISOString().slice(0, 10)
 
   function change(key, value) {
+    // A field echoing back what the form already says -- the title emptying
+    // itself because the draft was just reset -- is not a change. Writing it
+    // anyway would replace the form in the middle of the update that set it.
+    if (typeof value !== "object" && pane.form[key] === value) return
     var next = {}
     for (var k in pane.form) next[k] = pane.form[k]
     next[key] = value
@@ -70,14 +74,24 @@ Item {
   }
 
   // Returns true when this pane swallowed the Escape. A dropdown that is open
-  // owns it; a focused field gives up focus but keeps its text.
+  // owns it; a focused field gives up focus but keeps its text. The
+  // new-story form asks the overlay instead (closePopup, leaveFields): there
+  // Esc warns and cancels, and leaving a field is part of the warning rather
+  // than a keystroke of its own.
   function escapePressed() {
-    if (teamPicker.popupOpen) { teamPicker.close(); return true }
-    if (iterationPicker.popupOpen) { iterationPicker.close(); return true }
-    if (ownerPicker.popupOpen) { ownerPicker.close(); return true }
+    if (pane.closePopup()) return true
     if (titleField.activeFocus || descriptionArea.activeFocus) { ring.forceActiveFocus(); return true }
     return false
   }
+
+  function closePopup() {
+    if (teamPicker.popupOpen) { teamPicker.close(); return true }
+    if (iterationPicker.popupOpen) { iterationPicker.close(); return true }
+    if (ownerPicker.popupOpen) { ownerPicker.close(); return true }
+    return false
+  }
+
+  function leaveFields() { ring.forceActiveFocus() }
 
   function submit() {
     if (pane.busy || pane.unchanged || !pane.store) return
@@ -515,16 +529,23 @@ Item {
         }
       }
 
+      // On an edit it backs out to the story. On a new story it is there
+      // once the draft has something in it, and throws it away straight
+      // off -- a click is not a reflex -- landing where you started it from.
       Button {
-        visible: pane.editing
+        visible: pane.editing || !!(pane.overlay && pane.overlay.draftDirty())
         bordered: true
         // Mid-save, Cancel would read as "discard this" while the write is
         // already on its way -- same reasoning as disabling Save itself.
         enabled: !pane.busy
         text: "Cancel"
+        tooltipText: pane.editing ? "Back to the story, unchanged" : "Throw this draft away (Esc twice)"
         foreground: pane.muted
         fontFamily: pane.fontFamily
-        onClicked: if (pane.store) pane.store.cancelEdit()
+        onClicked: {
+          if (pane.editing) { if (pane.store) pane.store.cancelEdit() }
+          else if (pane.overlay) pane.overlay.cancelDraft()
+        }
       }
 
       Button {

@@ -591,6 +591,26 @@ function draftIsDirty(form, defaults) {
   return false
 }
 
+// What Esc does on the new-story form. An open dropdown closes first. A
+// draft with something in it is warned about once -- a reflex keystroke
+// should not cost a half-written story -- and the next Esc cancels it. A
+// blank form has nothing to lose, so Esc cancels straight away.
+function composeEscape(popupOpen, dirty, armed) {
+  if (popupOpen) return "popup"
+  if (dirty && !armed) return "arm"
+  return "cancel"
+}
+
+// Where cancelling a new story lands: the pane it was started from -- the
+// list, or the story that was open -- or nowhere, which closes the panel,
+// when the panel was opened straight onto the form.
+function cameFrom(mode, storyId) {
+  var m = str(mode)
+  if (m !== "mine" && m !== "settings") return null
+  var id = parseInt(storyId, 10)
+  return { mode: m, storyId: m === "mine" && isFinite(id) && id > 0 ? id : 0 }
+}
+
 // After filing one. Team, iteration and owner stay put when sticky: five
 // stories in a row usually belong to the same sprint. The PR link does not —
 // the next story is not about that pull request.
@@ -1613,6 +1633,7 @@ if (typeof module !== "undefined") {
     ownerList: ownerList, addOwner: addOwner, removeOwner: removeOwner,
     ownerChips: ownerChips, ownerAddOptions: ownerAddOptions,
     fileList: fileList, addFiles: addFiles, removeFile: removeFile, withScreenshots: withScreenshots,
+    composeEscape: composeEscape, cameFrom: cameFrom,
     editBase: editBase, buildUpdatePatch: buildUpdatePatch, resolveIterationSetting: resolveIterationSetting,
     SOLVE_PROMPT_LIMIT: SOLVE_PROMPT_LIMIT,
     solveAgentName: solveAgentName, solveBranch: solveBranch,

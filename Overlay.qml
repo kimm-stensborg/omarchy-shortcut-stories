@@ -40,6 +40,10 @@ Item {
   // Shortcut against -- see Model.editBase.
   property var editBase: null
   property bool discardArmed: false
+  // Where cancelling a new story goes back to (Model.cameFrom): set when
+  // Alt+1 leaves the list, a story or the settings for the form, cleared
+  // when the panel is opened straight onto it.
+  property var composeFrom: null
 
   // ---- Theme. Read once, so a theme change moves every colour at once.
   readonly property color background: Color.menu.background
@@ -139,6 +143,7 @@ Item {
       ? String(payload.mode)
       : (payload.mode === "compose" ? "compose" : root.defaultMode)
     root.discardArmed = false
+    root.composeFrom = null
     if (root.store) root.store.ensureRefs()
     if (root.mode === "settings" && root.store) root.store.refreshWorkspaces()
     var blank = !root.formSeeded || !root.draftDirty()
@@ -196,6 +201,8 @@ Item {
   }
 
   function setMode(next) {
+    if (next === "compose" && root.mode !== "compose")
+      root.composeFrom = Model.cameFrom(root.mode, root.store ? root.store.detailFor : 0)
     if (root.store && root.storyOpen) root.store.closeStory()
     root.mode = next
     root.discardArmed = false
@@ -236,15 +243,36 @@ Item {
     }
     if (root.storyOpen && root.mode === "mine") { root.store.closeStory(); return }
     var pane = paneLoader.item
+    if (root.mode === "compose" && pane && typeof pane.closePopup === "function") {
+      var step = Model.composeEscape(false, root.draftDirty(), root.discardArmed)
+      if (pane.closePopup()) return
+      if (step === "arm") {
+        root.discardArmed = true
+        discardTimer.restart()
+        pane.leaveFields()
+        return
+      }
+      root.cancelDraft()
+      return
+    }
     if (pane && typeof pane.escapePressed === "function" && pane.escapePressed()) {
       root.discardArmed = false
       return
     }
-    if (root.mode === "compose" && root.draftDirty()) {
-      if (!root.discardArmed) { root.discardArmed = true; discardTimer.restart(); return }
-      root.resetForm()
-    }
     root.dismiss()
+  }
+
+  // Throws the new-story draft away and goes back to where it was started
+  // from: the list, the story that was open, the settings -- or, when the
+  // panel opened straight onto the form, closes it.
+  function cancelDraft() {
+    var from = root.composeFrom
+    root.discardArmed = false
+    root.composeFrom = null
+    root.resetForm()
+    if (!from) { root.dismiss(); return }
+    root.setMode(from.mode)
+    if (from.storyId && root.store) root.store.showStory(from.storyId)
   }
 
   Timer { id: discardTimer; interval: 3000; onTriggered: root.discardArmed = false }
@@ -434,7 +462,7 @@ Item {
   readonly property bool footerIsError: !!(root.store && root.store.actionError)
 
   readonly property string footerText: {
-    if (root.discardArmed) return "Draft will be lost — Esc again to discard"
+    if (root.discardArmed) return "Draft will be lost — Esc again to throw it away"
     // None of the compose or list keys do anything behind the lock, so the
     // footer must not offer them.
     if (root.locked && root.mode !== "settings")
@@ -447,7 +475,8 @@ Item {
     if (root.store && root.store.editingId)
       return root.store.updating ? "Saving…" : "Enter saves it · Tab moves on · Esc cancels the edit"
     if (root.mode === "compose")
-      return "Enter files it · a GitHub PR link fills it in · Alt+S or Ctrl+V an image · Tab moves on · Alt+2 your stories · Esc closes"
+      return "Enter files it · a GitHub PR link fills it in · Alt+S or Ctrl+V an image · Tab moves on · Alt+2 your stories · "
+        + (root.draftDirty() ? "Esc twice cancels" : (root.composeFrom ? "Esc back" : "Esc closes"))
     if (root.store && root.store.solving)
       return "Starting the agent in Herdr…"
     if (root.store && root.store.solveError && root.mode === "mine" && root.storyOpen)

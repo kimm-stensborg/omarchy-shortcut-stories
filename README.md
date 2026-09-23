@@ -121,7 +121,7 @@ Then delete the `-- Shortcut Stories overlay` block from
 | `Ctrl + ,` | Settings. |
 | `Ctrl + R` | Re-read your workspace and your stories. |
 | `Alt + I` | In the list, only the sprint today falls inside. Again shows everything. |
-| `Esc` | Closes a dropdown, then gives a field back its focus, then closes the panel. |
+| `Esc` | Closes a dropdown first. On a new story with something in it, warns, then cancels it and goes back to where you started it. Elsewhere it goes back a step, then closes the panel. |
 
 In **My stories**: `↑` `↓` walk the list, `Enter` (or a click) opens the story,
 and `Ctrl + O` opens it in your browser. **All** and the current sprint sit
@@ -173,7 +173,13 @@ team, iteration and owners where they were -- five stories in a row usually
 belong to the same sprint. Turn that off with **Keep team and iteration after
 filing**.
 
-`Esc` on a story you have started writing asks once before throwing it away.
+To give up on a new story, press **Cancel** beside Create, or `Esc` twice:
+the first warns -- and lets go of the field you were typing in -- the second
+throws the draft away. Either way you land where you started it: the list,
+the story you had open, or the settings, if you came from there with
+`Alt + 1`; the panel closes if it opened straight onto the form. A blank
+form has nothing to lose, so one `Esc` does it. Closing the panel any other
+way keeps the draft for next time.
 
 ### From a screenshot
 
