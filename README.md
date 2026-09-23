@@ -214,6 +214,10 @@ and the comments. The description and the comments are rendered rather than
 left as markdown source. That is the part you need in front of you to
 actually do the work, and it is why the list does not try to show it.
 
+Under the title sits a row of chips: the reference -- a click copies
+`sc-1234`, for a commit message or a chat -- and, when there are any, its
+pull request and the agent working on it.
+
 The description runs the full width of the card rather than sharing it with
 the facts, because it is prose and a narrow column of prose is harder to read.
 It wraps mid-word where it has to, so a pasted URL stays inside the card.
@@ -273,17 +277,17 @@ comments, and to leave the Shortcut story where it is and not to push. In the
 checkout it creates the branch itself. In a worktree the branch is already
 checked out, and the prompt says so.
 
-Once an agent has the story, the story says where it has got to, under its
-title: `Agent working · sc-1234 · 3 commits · uncommitted changes`. Waiting
+Once an agent has the story, a chip under its title says where it has got
+to: `Agent working · sc-1234 · 3 commits · uncommitted changes`. Waiting
 for you and finished are in the accent colour, because both mean it is your
 turn. It is Herdr's status and what git says about `sc-<id>` in the agent's
 directory, checked every ten seconds while a story is open or any Solve
 agent is running, and with the ordinary refresh otherwise. Nothing leaves
-the machine to find it out. The line is only there while Herdr has an agent
+the machine to find it out. The chip is only there while Herdr has an agent
 for that story. The bar shows a dot when one of them wants you (see the bar,
 above).
 
-The story's pull request sits under its title with how it is doing:
+The story's pull request is a chip beside it, with how it is doing:
 `acme/app#42  open · checks passing · waiting for review`. Red when a check
 failed or changes were asked for, the accent when it is merged or approved
 with everything green. It is the PR linked on the story, or else the one

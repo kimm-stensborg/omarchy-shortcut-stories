@@ -118,6 +118,15 @@ Item {
   }
   Timer { id: prCopiedTimer; interval: 1500; onTriggered: view.prCopied = false }
 
+  property bool refCopied: false
+  function copyRef() {
+    if (!view.detail || !view.detail.ref) return
+    Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(view.detail.ref) + " | wl-copy"])
+    view.refCopied = true
+    refCopiedTimer.restart()
+  }
+  Timer { id: refCopiedTimer; interval: 1500; onTriggered: view.refCopied = false }
+
   Item {
     id: keys
     anchors.fill: parent
@@ -170,14 +179,6 @@ Item {
           foreground: view.muted
           fontFamily: view.fontFamily
           onClicked: view.back()
-        }
-
-        Text {
-          visible: !!view.detail
-          text: view.detail ? view.detail.glyph + "  " + view.detail.ref : ""
-          color: view.muted
-          font.family: view.fontFamily
-          font.pixelSize: Style.font.caption
         }
 
         Text {
@@ -236,57 +237,65 @@ Item {
         }
       }
 
-      // ---- The linked PR, if there is one. A click copies the URL rather
-      // than opening it -- Open above already does that for the story, and a
-      // PR link is usually wanted to paste somewhere else, not to visit.
-      // How it is doing sits beside it: red when a check failed or changes
-      // were asked for, the accent when it is merged or approved and green.
-      RowLayout {
+      // ---- What the story is and where its work has got to, as a row of
+      // chips under the title, in the same shape as the move strip: the
+      // reference, the pull request and how it is doing, and the agent Solve
+      // started. Colour carries the news -- red for a failing check or
+      // changes asked for, the accent for merged, approved, or an agent
+      // that wants you back.
+      Flow {
         Layout.fillWidth: true
-        visible: view.prUrl !== ""
-        spacing: Style.spacing.lg
+        visible: !!view.detail
+        spacing: Style.spacing.controlGap
 
-        // Caption size and no padding of its own, so it lines up with the
-        // agent line under it and the status text beside it; still a button
-        // for the hover and the click.
+        // A click copies the reference, for a commit message or a chat.
         Button {
-          bordered: false
-          iconText: ""
-          text: Model.prRefLabel(view.prUrl)
-          tooltipText: view.prCopied ? "Copied!" : "Copy the pull request link"
+          bordered: true
+          iconText: view.detail ? view.detail.glyph : ""
+          text: view.detail ? view.detail.ref : ""
+          tooltipText: view.refCopied ? "Copied!" : "Copy " + (view.detail ? view.detail.ref : "")
           foreground: view.muted
           fontFamily: view.fontFamily
           fontSize: Style.font.caption
           iconSize: Style.font.caption
-          horizontalPadding: 0
-          verticalPadding: 0
+          horizontalPadding: Style.space(8)
+          verticalPadding: Style.space(3)
+          onClicked: view.copyRef()
+        }
+
+        // A click copies the URL rather than opening it -- Open above
+        // already does that for the story, and a PR link is usually wanted
+        // to paste somewhere else, not to visit.
+        Button {
+          visible: view.prUrl !== ""
+          bordered: true
+          iconText: ""
+          text: Model.prRefLabel(view.prUrl) + (view.prStatus && view.prStatus.summary ? "  ·  " + view.prStatus.summary : "")
+          tooltipText: view.prCopied ? "Copied!" : "Copy the pull request link"
+          foreground: !view.prStatus ? view.muted
+            : view.prStatus.tone === "bad" ? view.urgent
+            : view.prStatus.tone === "good" ? view.accent : view.muted
+          fontFamily: view.fontFamily
+          fontSize: Style.font.caption
+          iconSize: Style.font.caption
+          horizontalPadding: Style.space(8)
+          verticalPadding: Style.space(3)
           onClicked: view.copyPrLink()
         }
 
-        Text {
-          Layout.fillWidth: true
-          visible: !!view.prStatus
-          elide: Text.ElideRight
-          text: view.prStatus ? view.prStatus.summary : ""
-          color: !view.prStatus ? view.muted
-            : view.prStatus.tone === "bad" ? view.urgent
-            : view.prStatus.tone === "good" ? view.accent : view.muted
-          font.family: view.fontFamily
-          font.pixelSize: Style.font.caption
+        Button {
+          visible: !!view.solveProgress
+          bordered: true
+          iconText: "󰚩"
+          text: view.solveProgress ? view.solveProgress.label : ""
+          tooltipText: "Alt+A takes you to it"
+          foreground: view.solveProgress && view.solveProgress.attention ? view.accent : view.muted
+          fontFamily: view.fontFamily
+          fontSize: Style.font.caption
+          iconSize: Style.font.caption
+          horizontalPadding: Style.space(8)
+          verticalPadding: Style.space(3)
         }
-      }
-
-      // ---- Where the agent Solve started has got to. Only there when one
-      // has this story; waiting for you or finished is in the accent, since
-      // both mean it is your turn.
-      Text {
-        Layout.fillWidth: true
-        visible: !!view.solveProgress
-        elide: Text.ElideRight
-        text: view.solveProgress ? "󰚩  " + view.solveProgress.label : ""
-        color: view.solveProgress && view.solveProgress.attention ? view.accent : view.muted
-        font.family: view.fontFamily
-        font.pixelSize: Style.font.caption
       }
 
       // Why Alt+P had nothing to do, or, once a PR is up, where the story
