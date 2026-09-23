@@ -321,8 +321,42 @@ function emptyForm(defaults) {
     // Figma file, anything not shaped like a GitHub PR. The edit form never
     // shows these, but it has to round-trip them, or saving a story that has
     // one would silently drop it.
-    otherLinks: []
+    otherLinks: [],
+    // Images to upload and show in the description when the story is filed:
+    // screenshots, by path on this machine.
+    files: []
   }
+}
+
+// The images on a draft, each once, in the order they were added.
+function fileList(files) {
+  var out = []
+  var list = files || []
+  for (var i = 0; i < list.length; i++) {
+    var f = str(list[i])
+    if (f !== "" && out.indexOf(f) === -1) out.push(f)
+  }
+  return out
+}
+
+function addFiles(files, more) {
+  return fileList((files || []).concat(more || []))
+}
+
+function removeFile(files, path) {
+  var gone = str(path)
+  return fileList(files).filter(function(f) { return f !== gone })
+}
+
+// A draft opened from a screenshot. On a blank form it becomes a bug, since
+// that is what a screenshot of something is nearly always for; a draft you
+// had already started keeps its type and just gains the picture.
+function withScreenshots(form, files, storyType, blank) {
+  var next = {}
+  for (var k in form) next[k] = form[k]
+  next.files = addFiles(form && form.files, files)
+  if (blank && str(storyType) !== "") next.storyType = str(storyType)
+  return next
 }
 
 // A paste of https://github.com/owner/repo/pull/123 — with optional trailing
@@ -377,6 +411,7 @@ function applyPrToForm(form, pr, defaults) {
     next.groupId = str(form.groupId)
     next.iterationId = str(form.iterationId)
     next.ownerIds = ownerList(form.ownerIds)
+    next.files = fileList(form.files)
   }
   var title = trim(pr && pr.title)
   if (title === "") title = "Pull request #" + str(pr && pr.number)
@@ -433,6 +468,9 @@ function buildCreateRequest(form, refs) {
     if (url !== "") cleaned.push(url)
   }
   if (cleaned.length) body.externalLinks = cleaned
+
+  var files = fileList(form && form.files)
+  if (files.length) body.files = files
 
   return body
 }
@@ -549,6 +587,7 @@ function draftIsDirty(form, defaults) {
   if (str(form.iterationId) !== base.iterationId) return true
   if (ownerList(form.ownerIds).join(",") !== base.ownerIds.join(",")) return true
   if ((form.externalLinks || []).length) return true
+  if (fileList(form.files).length) return true
   return false
 }
 
@@ -1573,6 +1612,7 @@ if (typeof module !== "undefined") {
     resolveOwnerSetting: resolveOwnerSetting,
     ownerList: ownerList, addOwner: addOwner, removeOwner: removeOwner,
     ownerChips: ownerChips, ownerAddOptions: ownerAddOptions,
+    fileList: fileList, addFiles: addFiles, removeFile: removeFile, withScreenshots: withScreenshots,
     editBase: editBase, buildUpdatePatch: buildUpdatePatch, resolveIterationSetting: resolveIterationSetting,
     SOLVE_PROMPT_LIMIT: SOLVE_PROMPT_LIMIT,
     solveAgentName: solveAgentName, solveBranch: solveBranch,

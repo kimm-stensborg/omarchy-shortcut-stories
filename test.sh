@@ -29,7 +29,23 @@ work = sys.argv[1]
 class Handler(http.server.BaseHTTPRequestHandler):
     def answer(self, method):
         length = int(self.headers.get("Content-Length") or 0)
-        body = self.rfile.read(length).decode() if length else ""
+        raw = self.rfile.read(length) if length else b""
+        ctype = self.headers.get("Content-Type", "")
+        if ctype.startswith("multipart/form-data"):
+            # An upload is logged as its parts -- field, file name, type,
+            # size -- since the bytes of a PNG say nothing a test can read.
+            from email.parser import BytesParser
+            from email.policy import default
+            msg = BytesParser(policy=default).parsebytes(
+                b"Content-Type: " + ctype.encode() + b"\r\n\r\n" + raw)
+            parts = []
+            for part in msg.iter_parts():
+                name = part.get_param("name", header="content-disposition")
+                data = part.get_payload(decode=True) or b""
+                parts.append(f"{name}={part.get_filename()}:{part.get_content_type()}:{len(data)}")
+            body = "multipart " + " ".join(parts)
+        else:
+            body = raw.decode(errors="replace")
         token = self.headers.get("Shortcut-Token", "")
         with open(os.path.join(work, "requests.log"), "a") as log:
             log.write(f"{method} {self.path} token={token} body={body}\n")
@@ -240,6 +256,126 @@ is "every owner is sent, trimmed" "$(jq -c .owner_ids <<<"$body")" '["ada-uuid",
 reset_log
 printf '%s' '{"name":"Nobody","ownerIds":[]}' | s create >/dev/null
 hasnt "no owners are left out"   "$(log | sed -n 's/.*body=//p' | tail -1)" "owner_ids"
+
+# ---- create with screenshots ---------------------------------------------
+echo "create with images"
+route "POST /api/v3/files" '[201, [{"id": 555, "url": "https://media.app.shortcut.com/acme/shot one.png", "name": "shot one.png"}]]'
+SHOTS="$WORK/cache/omarchy-shortcut-stories/shots"
+mine_png="$WORK/mine.png"
+printf '\x89PNG fake' >"$mine_png"
+reset_log
+mkdir -p "$SHOTS"
+printf '\x89PNG fake' >"$SHOTS/shot one.png"
+out=$(jq -cn --arg a "$SHOTS/shot one.png" --arg b "$mine_png" \
+  '{name: "It breaks", description: "Click twice.", storyType: "bug", files: [$a, $b]}' | s create)
+is "a story with images is filed"     "$(jq -r .ok <<<"$out")" "true"
+is "each image is uploaded, then the story" \
+  "$(log | grep -oE '^(GET|POST|PUT) [^ ]+' | tr '\n' ',')" "POST /api/v3/files,POST /api/v3/files,POST /api/v3/stories,"
+has "as a PNG under file0"            "$(log | grep 'POST /api/v3/files' | head -1)" "file0=shot one.png:image/png:9"
+body=$(log | grep 'POST /api/v3/stories' | sed -n 's/.*body=//p')
+is "they are attached"                "$(jq -c .file_ids <<<"$body")" "[555,555]"
+is "and shown under the description"  "$(jq -r .description <<<"$body")" "$(printf 'Click twice.\n\n![](https://media.app.shortcut.com/acme/shot one.png)\n\n![](https://media.app.shortcut.com/acme/shot one.png)')"
+[[ -e "$SHOTS/shot one.png" ]] && no "a shot it took is cleared once filed" "still there" "gone" || ok "a shot it took is cleared once filed"
+[[ -e $mine_png ]] && ok "a file of yours is left alone" || no "a file of yours is left alone" "deleted" "kept"
+
+reset_log
+printf '\x89PNG fake' >"$WORK/only.png"
+out=$(jq -cn --arg a "$WORK/only.png" '{name: "Just a picture", files: [$a]}' | s create)
+body=$(log | grep 'POST /api/v3/stories' | sed -n 's/.*body=//p')
+is "no text, just the picture"        "$(jq -r .description <<<"$body")" "![](https://media.app.shortcut.com/acme/shot one.png)"
+
+reset_log
+mkdir -p "$SHOTS"; printf 'x' >"$SHOTS/kept.png"
+route "POST /api/v3/files" '[413, {"message": "File too large"}]'
+out=$(jq -cn --arg a "$SHOTS/kept.png" '{name: "Too big", files: [$a]}' | s create)
+is "a failed upload fails the story"  "$(jq -r .ok <<<"$out")" "false"
+has "saying which file"               "$(jq -r .error <<<"$out")" "Uploading kept.png failed"
+is "and files nothing"                "$(log | grep -c 'POST /api/v3/stories')" "0"
+[[ -e "$SHOTS/kept.png" ]] && ok "and keeps the shot for another go" || no "and keeps the shot for another go" "deleted" "kept"
+route "POST /api/v3/files" '[201, [{"id": 555, "url": "https://media.app.shortcut.com/acme/shot one.png"}]]'
+
+reset_log
+out=$(jq -cn '{name: "x", files: ["/nope/not-here.png"]}' | s create)
+is "a missing file is refused"        "$(jq -r .code <<<"$out")" "usage"
+out=$(jq -cn '{name: "x", files: "a.png"}' | s create)
+is "files that are not a list are refused" "$(jq -r .code <<<"$out")" "usage"
+is "and neither calls out"            "$(log | wc -l | tr -d ' ')" "0"
+
+reset_log
+out=$(jq -cn '{name: "x", files: []}' | s create)
+hasnt "no files, no file_ids"         "$(log | sed -n 's/.*body=//p' | tail -1)" "file_ids"
+
+# ---- shot ------------------------------------------------------------------
+echo "shot"
+mkdir -p "$WORK/shotbin"
+cat >"$WORK/shotbin/omarchy-capture-screenshot" <<'SH'
+#!/bin/bash
+printf '%s\n' "$*" >>"$SHOT_LOG"
+[[ -n ${SHOT_CANCEL:-} ]] && exit 0
+f="${OMARCHY_SCREENSHOT_DIR:?}/screenshot-test.png"
+printf 'png' >"$f"
+echo "$f"
+SH
+cat >"$WORK/shotbin/omarchy-shell" <<'SH'
+#!/bin/bash
+printf 'summon %s\n' "$*" >>"$SHOT_LOG"
+SH
+chmod +x "$WORK/shotbin/"*
+shot() { PATH="$WORK/shotbin:$PATH" SHOT_LOG="$WORK/shot.log" SHOT_CANCEL="${SHOT_CANCEL:-}" "$CLI" shot "$@"; }
+: >"$WORK/shot.log"
+out=$(shot)
+is "a shot says where it is"          "$(jq -r .path <<<"$out")" "$WORK/cache/omarchy-shortcut-stories/shots/screenshot-test.png"
+has "a region, saved"                 "$(cat "$WORK/shot.log")" "region save"
+hasnt "without --open nothing opens"  "$(cat "$WORK/shot.log")" "summon"
+
+: >"$WORK/shot.log"
+out=$(shot --open)
+has "--open opens the panel"          "$(cat "$WORK/shot.log")" "summon shell summon io.github.kimm-stensborg.shortcut-stories"
+payload=$(sed -n 's/^summon shell summon io.github.kimm-stensborg.shortcut-stories //p' "$WORK/shot.log")
+is "on a new bug"                     "$(jq -r '.mode + " " + .storyType' <<<"$payload")" "compose bug"
+is "with the shot on it"              "$(jq -r '.files[0]' <<<"$payload")" "$(jq -r .path <<<"$out")"
+
+: >"$WORK/shot.log"
+out=$(SHOT_CANCEL=1 shot --open)
+is "cancelling is not an error"       "$(jq -r .ok <<<"$out")" "true"
+is "and has no path"                  "$(jq -c .path <<<"$out")" "null"
+hasnt "and opens nothing"             "$(cat "$WORK/shot.log")" "summon"
+
+touch -d '10 days ago' "$WORK/cache/omarchy-shortcut-stories/shots/screenshot-test.png"
+cp "$WORK/cache/omarchy-shortcut-stories/shots/screenshot-test.png" "$WORK/cache/omarchy-shortcut-stories/shots/old.png"
+touch -d '10 days ago' "$WORK/cache/omarchy-shortcut-stories/shots/old.png"
+SHOT_CANCEL=1 shot >/dev/null
+[[ -e "$WORK/cache/omarchy-shortcut-stories/shots/old.png" ]] && no "a week-old shot is cleared" "still there" "gone" || ok "a week-old shot is cleared"
+
+# A PATH with only what bin/shortcut itself needs. Omarchy installs its
+# screenshot command into /usr/bin too, so a trimmed system PATH would still
+# find the real one -- and open a region picker on the screen running this.
+mkdir -p "$WORK/bare-bin"
+for tool in bash jq mktemp rm mkdir find tail realpath date cat; do
+  ln -sf "$(command -v "$tool")" "$WORK/bare-bin/$tool"
+done
+out=$(PATH="$WORK/bare-bin" "$CLI" shot)
+is "no Omarchy screenshot command is a clean failure" "$(jq -r .code <<<"$out")" "missing"
+
+# ---- paste -----------------------------------------------------------------
+echo "paste"
+cat >"$WORK/shotbin/wl-paste" <<'SH'
+#!/bin/bash
+if [[ $1 == --list-types ]]; then printf '%b' "${CLIP_TYPES:-}"; exit 0; fi
+printf 'IMAGEBYTES'
+SH
+chmod +x "$WORK/shotbin/wl-paste"
+paste_img() { PATH="$WORK/shotbin:$PATH" CLIP_TYPES="$1" "$CLI" paste; }
+out=$(paste_img 'text/plain\nimage/png\n')
+path=$(jq -r .path <<<"$out")
+is "an image on the clipboard is saved"   "$(cat "$path")" "IMAGEBYTES"
+has "next to the screenshots, as a PNG"   "$path" "/omarchy-shortcut-stories/shots/pasted-"
+[[ $path == *.png ]] && ok "with the right extension" || no "with the right extension" "$path" "*.png"
+out=$(paste_img 'image/jpeg\n')
+[[ $(jq -r .path <<<"$out") == *.jpg ]] && ok "a JPEG stays a JPEG" || no "a JPEG stays a JPEG" "$out" "*.jpg"
+out=$(paste_img 'text/plain\nUTF8_STRING\n')
+is "text on the clipboard is not an error" "$(jq -r .ok <<<"$out")" "true"
+is "and saves nothing"                    "$(jq -c .path <<<"$out")" "null"
 
 reset_log
 route "POST /api/v3/stories" '[201, {"id": 1234, "name": "From a PR", "story_type": "feature", "app_url": "https://app.shortcut.com/acme/story/1234", "workflow_state_id": 5002, "group_id": "g1", "iteration_id": 42, "external_links": ["https://github.com/acme/app/pull/42"], "updated_at": "2026-09-22T10:00:00Z"}]'
@@ -916,6 +1052,24 @@ const cases = [
   ["nobody is listed twice",   new Set(values(M.memberOptions(refs, "me-uuid")).split(",")).size, 3],
 
   // owners
+  // images on a draft
+  ["a fresh form has no images",      M.emptyForm().files.length, 0],
+  ["images are added once each",      M.addFiles(["/a.png"], ["/b.png", "/a.png"]).join(","), "/a.png,/b.png"],
+  ["removing takes only that one",    M.removeFile(["/a.png", "/b.png"], "/a.png").join(","), "/b.png"],
+  ["a blank form from a screenshot is a bug",
+    M.withScreenshots(M.emptyForm(), ["/s.png"], "bug", true).storyType, "bug"],
+  ["a started draft keeps its type",
+    M.withScreenshots(Object.assign(M.emptyForm(), {name: "x", storyType: "chore"}), ["/s.png"], "bug", false).storyType, "chore"],
+  ["and gains the picture",
+    M.withScreenshots(Object.assign(M.emptyForm(), {files: ["/a.png"]}), ["/s.png"], "bug", false).files.join(","), "/a.png,/s.png"],
+  ["images go out with the story",
+    JSON.stringify(M.buildCreateRequest({name: "x", files: ["/s.png"]}, refs).files), '["/s.png"]'],
+  ["no images, no key",               M.buildCreateRequest({name: "x", files: []}, refs).files, undefined],
+  ["an image alone is a draft",       M.draftIsDirty(Object.assign(M.emptyForm(), {files: ["/s.png"]})), true],
+  ["filing clears the images",        M.clearForm({name: "x", files: ["/s.png"]}, {}, true).files.length, 0],
+  ["filling from a PR keeps them",
+    M.applyPrToForm({files: ["/s.png"]}, {title: "t", url: "https://github.com/a/b/pull/1"}).files.join(","), "/s.png"],
+
   ["a default owner seeds the list",  M.emptyForm({ownerId: "me-uuid"}).ownerIds.join(","), "me-uuid"],
   ["no default owner, no owners",     M.emptyForm({}).ownerIds.length, 0],
   ["adding appends",                  M.addOwner(["me-uuid"], "ada-uuid").join(","), "me-uuid,ada-uuid"],

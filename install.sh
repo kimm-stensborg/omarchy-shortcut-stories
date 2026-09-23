@@ -4,11 +4,15 @@
 #
 #   ./install.sh                 pick a shortcut interactively
 #   ./install.sh --key "SUPER + ALT + T"
+#   ./install.sh --shot-key "SUPER + ALT + B"
+#   ./install.sh --no-shot-key   no key for a bug from a screenshot
 #   ./install.sh --no-bind       just enable the plugin
 #
 # The shortcut proposed first is SUPER + ALT + T, unless Hyprland already has
 # that combination, in which case the first free candidate is proposed instead.
-# Whatever is proposed can be edited; Enter accepts it.
+# Whatever is proposed can be edited; Enter accepts it. A second key, SUPER +
+# ALT + B, screenshots a region and opens a new bug with it -- bound only
+# when it is free, never taken over.
 
 set -euo pipefail
 
@@ -39,6 +43,7 @@ done
 
 key=""
 bind=1
+shot_key="SUPER + ALT + B"
 while (($# > 0)); do
   case "$1" in
   --key)
@@ -46,12 +51,21 @@ while (($# > 0)); do
     [[ -n $key ]] || fail "--key requires a shortcut"
     shift 2
     ;;
+  --shot-key)
+    shot_key="${2:-}"
+    [[ -n $shot_key ]] || fail "--shot-key requires a shortcut"
+    shift 2
+    ;;
+  --no-shot-key)
+    shot_key=""
+    shift
+    ;;
   --no-bind)
     bind=0
     shift
     ;;
   -h | --help)
-    sed -n '3,11p' "$0" | sed 's/^# \?//'
+    sed -n '3,15p' "$0" | sed 's/^# \?//'
     exit 0
     ;;
   *) fail "unknown option: $1" ;;
@@ -96,8 +110,8 @@ bound_combos() {
     | "\($m)\(if $m == "" then "" else "+" end)\(.key | ascii_downcase)\t\(.description // .dispatcher)"'
 }
 
-# The combination an earlier run of this script bound, so re-running and
-# keeping the same shortcut does not look like a collision with itself.
+# Every combination an earlier run of this script bound, so re-running and
+# keeping the same shortcuts does not look like a collision with itself.
 ours() {
   [[ -f $BINDINGS ]] || return 0
   awk -v marker="$MARKER" '
@@ -105,15 +119,17 @@ ours() {
     found && /^o\.bind\(/ {
       match($0, /"[^"]+"/)
       print substr($0, RSTART + 1, RLENGTH - 2)
-      exit
+      next
     }
+    found && !/^hl\.unbind\(/ { exit }
   ' "$BINDINGS"
 }
 
 is_taken() {
   local wanted=$1 mine
-  mine=$(normalize "$(ours)")
-  [[ -n $mine && $wanted == "$mine" ]] && return 1
+  while IFS= read -r mine; do
+    [[ -n $mine && $wanted == "$(normalize "$mine")" ]] && return 1
+  done < <(ours)
   bound_combos | cut -f1 | grep -qx "$wanted"
 }
 
@@ -133,7 +149,7 @@ pick_default() {
 }
 
 write_binding() {
-  local combo="$1" conflict="$2"
+  local combo="$1" conflict="$2" shot="$3"
   mkdir -p "$(dirname "$BINDINGS")"
   touch "$BINDINGS"
   cp "$BINDINGS" "$BINDINGS.bak.$(date +%s)"
@@ -157,6 +173,10 @@ write_binding() {
     printf '\n%s\n' "$MARKER"
     [[ -z $conflict ]] || printf 'hl.unbind("%s")\n' "$combo"
     printf 'o.bind("%s", "New Shortcut story", "omarchy-shell shell toggle %s '"'"'{}'"'"'")\n' "$combo" "$ID"
+    # The installed path, not this checkout's: it is the same file whether
+    # the plugin is a clone or a link, and it survives the checkout moving.
+    [[ -z $shot ]] || printf 'o.bind("%s", "Shortcut bug from a screenshot", "%s shot --open")\n' \
+      "$shot" "$HOME/.config/omarchy/plugins/$ID/bin/shortcut"
   } >>"$BINDINGS"
 
   hyprctl reload >/dev/null
@@ -195,8 +215,23 @@ if ((bind)); then
     fi
   fi
 
-  write_binding "$key" "$conflict"
+  # The screenshot key is a convenience, so it never takes a combination
+  # over: a busy one is skipped and said so, and --shot-key picks another.
+  if [[ -n $shot_key ]]; then
+    shot_normalized=$(normalize "$shot_key")
+    if [[ $shot_normalized == "$normalized" ]]; then
+      echo "$shot_key is the panel's own key; no screenshot key bound."
+      shot_key=""
+    elif is_taken "$shot_normalized"; then
+      echo "$shot_key is already bound to: $(describe_conflict "$shot_normalized"); no screenshot key bound."
+      echo "Pick another with --shot-key."
+      shot_key=""
+    fi
+  fi
+
+  write_binding "$key" "$conflict" "$shot_key"
   echo "Bound $key to Shortcut Stories."
+  [[ -z $shot_key ]] || echo "Bound $shot_key to a new bug from a screenshot."
 fi
 
 omarchy plugin enable "$ID"

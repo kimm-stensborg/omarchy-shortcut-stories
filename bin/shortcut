@@ -7,13 +7,16 @@
 #   shortcut logout            forget the stored token and the cached reference data
 #   shortcut refs [--force]    teams, workflows, members, iterations and you
 #   shortcut create            read one JSON object on stdin and file it as a story
+#   shortcut shot [--open]     pick a region and screenshot it for a story; --open
+#                              opens the panel on a new bug with it
+#   shortcut paste             save an image on the clipboard for a story, if there is one
 #   shortcut update <id>       read one JSON object on stdin and rewrite the story with it
 #   shortcut pr <url>          read a GitHub pull request (title, body, url) for the form
 #   shortcut mine [--limit N]  the stories assigned to you that are not done
 #   shortcut move <id> <state> move a story to another workflow state
 #   shortcut show <id>         one story in full: description, tasks and comments
 #
-# refs, create, update, pr, mine, move and show always print a single JSON object, {"ok": false,
+# refs, create, update, pr, mine, move, show, shot and paste always print a single JSON object, {"ok": false,
 # "code": ..., "error": ...} on failure, so the panel has exactly one thing to
 # parse. login and logout print human lines instead: they run in a terminal,
 # where a JSON blob is no use to the person reading it.
@@ -31,6 +34,7 @@ CACHE_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-shortcut-stories
 TOKEN_FILE=$CONFIG_DIR/token
 REFS_FILE=$CACHE_DIR/refs.json
 REFS_TTL=${SHORTCUT_REFS_TTL:-21600}
+PLUGIN_ID=io.github.kimm-stensborg.shortcut-stories
 
 # Stories that are not done. The four workflow state types are a fixed enum in
 # the API, so naming three of them here is not a list that can drift.
@@ -234,15 +238,56 @@ cmd_refs() {
 
 # ---- stories -------------------------------------------------------------
 
+# Screenshots taken for a story wait here until the story is filed.
+SHOTS_DIR=$CACHE_DIR/shots
+
+# Uploads one image to Shortcut and prints {id, url}. curl reads the file
+# itself (-F @path), so a path with spaces or quotes in it is still one path;
+# the token goes in the same way as api()'s, never on the command line.
+upload_file() {
+  local path=$1 out=$2 type
+  case ${path,,} in
+    *.png) type=image/png ;;
+    *.jpg|*.jpeg) type=image/jpeg ;;
+    *.gif) type=image/gif ;;
+    *.webp) type=image/webp ;;
+    *) type=application/octet-stream ;;
+  esac
+  local status
+  status=$(curl -sS --max-time "${SHORTCUT_UPLOAD_TIMEOUT:-60}" -X POST \
+    -H @<(printf 'Shortcut-Token: %s\n' "$TOKEN") \
+    -H 'Accept: application/json' \
+    -F "file0=@\"$path\";type=$type" \
+    -D "$out.head" -o "$out" -w '%{http_code}' "$API/files" 2>/dev/null)
+  check_status "${status:-000}" "$out" "Uploading ${path##*/}"
+  jq -ce 'if type == "array" then .[0] else . end | select(.id != null and (.url // "") != "") | {id, url}' "$out" 2>/dev/null ||
+    fail "Shortcut did not say where ${path##*/} went" http
+}
+
 # create reads a JSON object on stdin rather than taking flags, because a
 # description is multiline and full of quotes, backticks and $ — as argv it
 # would survive QML but not the tests, which drive this script from bash.
 # The keys are a whitelist, not a pass-through: a key QML spells wrong fails
 # here, where a test can catch it, instead of being dropped silently by the API.
+#
+# files is a list of image paths. Each is uploaded first, then attached to
+# the story and shown in its description, under whatever text is there --
+# the screenshot is the bug report. Nothing is filed if an upload fails. A
+# file this script took itself (under SHOTS_DIR) is deleted once the story
+# exists; any other file is yours and is left alone.
 cmd_create() {
   local input; input=$(cat)
   jq -e 'type == "object" and (.name | type) == "string" and ((.name | gsub("^\\s+|\\s+$"; "")) | length) > 0' \
     <<<"$input" >/dev/null 2>&1 || fail "create needs a JSON object with a name" usage
+  jq -e '(.files // []) | type == "array" and all(.[]; type == "string") and length <= 10' \
+    <<<"$input" >/dev/null 2>&1 || fail "files needs to be a list of at most ten paths" usage
+  local -a files=()
+  local f
+  while IFS= read -r f; do
+    [[ -n $f ]] || continue
+    [[ -f $f && -r $f ]] || fail "There is no image at $f" usage
+    files+=("$f")
+  done < <(jq -r '(.files // [])[]' <<<"$input")
 
   if [[ -n ${SHORTCUT_DEMO:-} ]]; then
     jq -cn --slurpfile in <(printf '%s' "$input") '{ok: true, story: {
@@ -252,6 +297,14 @@ cmd_create() {
       externalLinks: ($in[0].externalLinks // [])}}'
     return
   fi
+
+  load_token
+  local uploaded="[]" n=0 one
+  for f in "${files[@]}"; do
+    one=$(upload_file "$f" "$WORK/upload$n") || { printf '%s\n' "$one"; exit 1; }
+    uploaded=$(jq -c --argjson one "$one" '. + [$one]' <<<"$uploaded")
+    n=$((n + 1))
+  done
 
   jq -c '
     {name: (.name | gsub("^\\s+|\\s+$"; ""))}
@@ -266,11 +319,18 @@ cmd_create() {
          (([.externalLinks[]? | select(type == "string") | gsub("^\\s+|\\s+$"; "") | select(length > 0)]) as $links
           | if ($links | length) > 0 then {external_links: $links} else {} end)
        else {} end)
-  ' <<<"$input" >"$WORK/body.json" || fail "create could not build a story" usage
+    | if ($uploaded | length) > 0 then
+        .file_ids = [$uploaded[].id]
+        | .description = ([(.description // empty), ($uploaded[] | "![](\(.url))")] | join("\n\n"))
+      else . end
+  ' --argjson uploaded "$uploaded" <<<"$input" >"$WORK/body.json" || fail "create could not build a story" usage
 
-  load_token
   local status; status=$(api POST "/stories" "$WORK/created" "$WORK/body.json")
   check_status "$status" "$WORK/created" "Creating the story"
+
+  for f in "${files[@]}"; do
+    [[ $(realpath -m "$f") == "$(realpath -m "$SHOTS_DIR")"/* ]] && rm -f "$f"
+  done
 
   jq -c "{ok: true, story: $story_summary}" "$WORK/created" ||
     fail "Shortcut sent an unreadable story" http
@@ -529,6 +589,62 @@ cmd_move() {
     fail "Shortcut sent an unreadable story" http
 }
 
+# ---- screenshots -----------------------------------------------------------
+
+# Omarchy's own screenshot command does the picking -- the same frozen screen
+# and region picker as the Print key -- and saves where it is told to, which
+# here is SHOTS_DIR rather than your Pictures folder. Cancelling the picker is
+# not an error: it prints {ok: true, path: null} and opens nothing.
+#
+# Shots left behind by a draft that was never filed are cleared after a week,
+# the next time one is taken.
+cmd_shot() {
+  local open=0
+  [[ ${1:-} == "--open" ]] && open=1
+  command -v omarchy-capture-screenshot >/dev/null 2>&1 ||
+    fail "Taking a screenshot needs omarchy-capture-screenshot" missing
+  mkdir -p "$SHOTS_DIR"
+  find "$SHOTS_DIR" -maxdepth 1 -type f -mtime +7 -delete 2>/dev/null
+
+  local path
+  path=$(OMARCHY_SCREENSHOT_DIR=$SHOTS_DIR omarchy-capture-screenshot region save 2>/dev/null | tail -1)
+  if [[ -z $path || ! -f $path ]]; then
+    jq -cn '{ok: true, path: null}'
+    return
+  fi
+  if (( open )); then
+    omarchy-shell shell summon "$PLUGIN_ID" \
+      "$(jq -cn --arg path "$path" '{mode: "compose", storyType: "bug", files: [$path]}')" >/dev/null 2>&1
+  fi
+  jq -cn --arg path "$path" '{ok: true, path: $path}'
+}
+
+# The image on the clipboard, saved next to the screenshots -- Print already
+# puts one there, and so does "copy image" in a browser. No image is not an
+# error: it prints {ok: true, path: null}, since Ctrl+V in the form is just
+# as often a paste of text.
+cmd_paste() {
+  command -v wl-paste >/dev/null 2>&1 || fail "Pasting an image needs wl-paste" missing
+  local types type ext
+  types=$(wl-paste --list-types 2>/dev/null) || types=""
+  for type in image/png image/jpeg image/webp image/gif; do
+    grep -qx "$type" <<<"$types" && break
+    type=""
+  done
+  if [[ -z $type ]]; then
+    jq -cn '{ok: true, path: null}'
+    return
+  fi
+  ext=${type#image/}; [[ $ext == jpeg ]] && ext=jpg
+  mkdir -p "$SHOTS_DIR"
+  local path="$SHOTS_DIR/pasted-$(date +%Y-%m-%d_%H-%M-%S)-$$.$ext"
+  if ! wl-paste --no-newline --type "$type" >"$path" 2>/dev/null || [[ ! -s $path ]]; then
+    rm -f "$path"
+    fail "The clipboard image could not be read" error
+  fi
+  jq -cn --arg path "$path" '{ok: true, path: $path}'
+}
+
 # ---- token ---------------------------------------------------------------
 
 cmd_login() {
@@ -569,6 +685,8 @@ cmd_logout() {
 case ${1:-} in
   refs) shift; cmd_refs "$@" ;;
   create) cmd_create ;;
+  shot) shift; cmd_shot "$@" ;;
+  paste) cmd_paste ;;
   update) shift; cmd_update "$@" ;;
   pr) shift; cmd_pr "$@" ;;
   mine) shift; cmd_mine "$@" ;;

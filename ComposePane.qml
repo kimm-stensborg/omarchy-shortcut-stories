@@ -57,6 +57,18 @@ Item {
 
   function takeFocus() { titleField.forceActiveFocus() }
 
+  // Ctrl+V with an image on the clipboard adds it to the story. The key is
+  // never swallowed here: a text field still pastes whatever text there is,
+  // and the image, if any, arrives alongside it.
+  function pasteImage(event) {
+    if (pane.editing || !pane.store) return
+    var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
+    if (!ctrl || event.key !== Qt.Key_V) return
+    pane.store.pasteImage(function(path) {
+      pane.change("files", Model.addFiles(pane.form.files, [path]))
+    })
+  }
+
   // Returns true when this pane swallowed the Escape. A dropdown that is open
   // owns it; a focused field gives up focus but keeps its text.
   function escapePressed() {
@@ -123,6 +135,7 @@ Item {
         prLookup.restart()
       }
       Keys.onPressed: function(event) {
+        pane.pasteImage(event)
         if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
           // A title is one line, and this is the fast path: summon, type, Enter.
           // A PR URL on Enter is resolved first, then filed.
@@ -315,6 +328,77 @@ Item {
       }
     }
 
+    // ---- Images. New stories only: each is uploaded when the story is
+    // filed and shown in its description. A thumbnail rather than a file
+    // name, so you can see it is the right screenshot; the cross takes it
+    // off. Alt+S adds another.
+    RowLayout {
+      Layout.fillWidth: true
+      visible: !pane.editing && imageRepeater.count > 0
+      spacing: Style.spacing.controlGap
+
+      Text {
+        text: "Images"
+        color: pane.muted
+        font.family: pane.fontFamily
+        font.pixelSize: Style.font.caption
+        Layout.preferredWidth: Style.space(90)
+        Layout.alignment: Qt.AlignTop
+      }
+
+      Flow {
+        Layout.fillWidth: true
+        spacing: Style.spacing.controlGap
+
+        Repeater {
+          id: imageRepeater
+          model: pane.editing ? [] : Model.fileList(pane.form.files)
+
+          Item {
+            id: shot
+            required property var modelData
+            readonly property real side: Style.space(72)
+            width: thumb.status === Image.Ready && thumb.implicitHeight > 0
+              ? Math.min(Style.space(200), thumb.implicitWidth * shot.side / thumb.implicitHeight) : shot.side
+            height: shot.side
+
+            Rectangle {
+              anchors.fill: parent
+              color: "transparent"
+              border.width: 1
+              border.color: pane.muted
+              radius: Style.cornerRadius
+            }
+
+            Image {
+              id: thumb
+              anchors.fill: parent
+              anchors.margins: 1
+              source: "file://" + encodeURI(shot.modelData)
+              sourceSize.height: shot.side * 2
+              fillMode: Image.PreserveAspectFit
+              asynchronous: true
+              cache: false
+            }
+
+            Button {
+              anchors.top: parent.top
+              anchors.right: parent.right
+              bordered: false
+              background: Qt.rgba(0, 0, 0, 0.55)
+              text: "󰅖"
+              tooltipText: "Take this image off the story"
+              foreground: pane.foreground
+              fontFamily: pane.fontFamily
+              horizontalPadding: Style.space(4)
+              verticalPadding: Style.space(2)
+              onClicked: pane.change("files", Model.removeFile(pane.form.files, shot.modelData))
+            }
+          }
+        }
+      }
+    }
+
     // ---- Linked PR. Edit only: create already links a story from a pasted
     // PR title (see the prLookup timer above), and retitling an existing
     // story from a paste is not something this form offers, so this is the
@@ -381,6 +465,7 @@ Item {
         background: null
         onTextChanged: pane.change("description", text)
         Keys.onPressed: function(event) {
+          pane.pasteImage(event)
           // Enter is a newline here and nowhere else in the form; Ctrl+Enter
           // is what files the story from inside it.
           if (event.key === Qt.Key_Tab) { pane.step(descriptionArea, 1); event.accepted = true }
@@ -470,6 +555,13 @@ Item {
       pane.change("storyType", "bug"); event.accepted = true
     } else if (alt && event.key === Qt.Key_C) {
       pane.change("storyType", "chore"); event.accepted = true
+    } else if (ctrl && event.key === Qt.Key_V) {
+      // Reaches here only from outside the text fields, which call it
+      // themselves; the Store keeps it to one paste either way.
+      pane.pasteImage(event)
+    } else if (alt && event.key === Qt.Key_S && !pane.editing) {
+      if (pane.overlay) pane.overlay.captureScreenshot()
+      event.accepted = true
     }
   }
 }

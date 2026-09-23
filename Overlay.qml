@@ -141,7 +141,14 @@ Item {
     root.discardArmed = false
     if (root.store) root.store.ensureRefs()
     if (root.mode === "settings" && root.store) root.store.refreshWorkspaces()
-    if (!root.formSeeded || !root.draftDirty()) root.resetForm()
+    var blank = !root.formSeeded || !root.draftDirty()
+    if (blank) root.resetForm()
+    // A screenshot taken for a story (bin/shortcut shot --open, or Alt+S
+    // coming back) lands on the new-story form, added to whatever draft was
+    // there rather than replacing it.
+    var files = Array.isArray(payload.files) ? payload.files : []
+    if (root.mode === "compose" && files.length)
+      root.form = Model.withScreenshots(root.form, files, payload.storyType, blank)
     // The bar's click on an agent that wants you names its story, so the
     // panel lands on it rather than on the list you would then search.
     var story = parseInt(payload.story, 10)
@@ -163,6 +170,30 @@ Item {
   }
 
   function toggle() { root.opened ? root.dismiss() : root.open("{}") }
+
+  // Alt+S on the form: the panel gets out of the way, you pick a region, and
+  // it comes back with the picture on the draft -- or just comes back, if
+  // the picker was cancelled. Reopened through the shell, like the bar
+  // does, so the shell's idea of whether the panel is open stays right.
+  function captureScreenshot() {
+    if (!root.store) return
+    root.dismiss()
+    shotDelay.restart()
+  }
+
+  function reopenWith(payload) {
+    Quickshell.execDetached(["omarchy-shell", "shell", "summon", root.pluginId, JSON.stringify(payload)])
+  }
+
+  // The picker freezes the screen as it is; the panel has to be gone first
+  // or it is in the picture.
+  Timer {
+    id: shotDelay
+    interval: 250
+    onTriggered: root.store.takeScreenshot(function(path) {
+      root.reopenWith(path ? { mode: "compose", storyType: "bug", files: [path] } : { mode: "compose" })
+    })
+  }
 
   function setMode(next) {
     if (root.store && root.storyOpen) root.store.closeStory()
@@ -416,7 +447,7 @@ Item {
     if (root.store && root.store.editingId)
       return root.store.updating ? "Saving…" : "Enter saves it · Tab moves on · Esc cancels the edit"
     if (root.mode === "compose")
-      return "Enter files it · a GitHub PR link fills it in · Tab moves on · Alt+2 your stories · Esc closes"
+      return "Enter files it · a GitHub PR link fills it in · Alt+S or Ctrl+V an image · Tab moves on · Alt+2 your stories · Esc closes"
     if (root.store && root.store.solving)
       return "Starting the agent in Herdr…"
     if (root.store && root.store.solveError && root.mode === "mine" && root.storyOpen)

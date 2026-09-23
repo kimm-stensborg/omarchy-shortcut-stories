@@ -19,7 +19,8 @@ background, border and font, with Hyprland's corner rounding.
 | `curl` | Talking to the Shortcut API |
 | `jq` | Reading and building the JSON that goes over it |
 | `libsecret` (`secret-tool`) | Keeping your API token in the keyring |
-| `gh` (optional) | Filling a new story from a GitHub pull request URL |
+| `gh` (optional) | Filling a new story from a GitHub pull request URL, and the PRs Solve's branches get |
+| `wl-clipboard` | Pasting an image into a new story (ships with Omarchy, as do `grim` and `slurp` for screenshots) |
 
 `secret-tool` is optional. Without it the token goes in a `0600` file under
 `~/.config/omarchy-shortcut-stories/` instead.
@@ -42,6 +43,10 @@ process, so read what you are installing first -- this one included.
 **SUPER + ALT + T** and offering the next free combination if Hyprland already
 has that one. It backs up `bindings.lua` before touching it. `--no-bind` skips
 the key, `--key "SUPER + ALT + C"` names one.
+
+It also binds **SUPER + ALT + B** to a new bug from a screenshot, but only if
+nothing has that combination: this one is never taken over. `--shot-key`
+names another, `--no-shot-key` leaves it out.
 
 To put the count in the bar as well:
 
@@ -103,6 +108,9 @@ Then delete the `-- Shortcut Stories overlay` block from
 | Key | Does |
 |-----|------|
 | **SUPER + ALT + T** | Show the panel, ready to write. Again hides it. |
+| **SUPER + ALT + B** | Pick a region of the screen; a new bug opens with it. |
+| `Alt + S` | On the form: the panel steps aside while you pick a region, and comes back with it. |
+| `Ctrl + V` | On the form, with an image on the clipboard: adds it. Text still pastes as text. |
 | `Enter` (locked) | Opens the terminal to set up your token. |
 | `Enter` | From the title, files the story. The fast path: summon, type, Enter. |
 | `Ctrl + Enter` | Files the story from anywhere, including the description. |
@@ -166,6 +174,24 @@ belong to the same sprint. Turn that off with **Keep team and iteration after
 filing**.
 
 `Esc` on a story you have started writing asks once before throwing it away.
+
+### From a screenshot
+
+**SUPER + ALT + B** freezes the screen and lets you pick a region, with the
+same picker as Print. The panel then opens on a new bug with the picture on
+it, focus in the title. Esc in the picker gives up without opening anything.
+On the form, `Alt + S` does the same without losing what you had written,
+and `Ctrl + V` adds an image already on the clipboard -- Print puts one
+there, and so does copying an image in a browser. A draft you had started
+keeps its type; a blank one becomes a bug.
+
+Each image shows as a thumbnail under the owners, with a cross to take it
+off. When the story is filed they are uploaded to Shortcut first, attached
+to the story, and shown in its description under whatever text you wrote.
+If an upload fails, nothing is filed and the draft keeps its images.
+Screenshots taken this way wait in the cache and are deleted once the story
+is filed; ones left by a draft you threw away are cleared after a week.
+Images can only go on a new story for now, not onto one you are editing.
 
 ## Reading a story
 
@@ -316,6 +342,7 @@ rather than going stale when this one ends.
 | `~/.cache/omarchy-shortcut-stories/refs.json` | Teams, workflows, people and iterations, so the pickers are filled before you open the panel |
 | `~/.cache/omarchy-shortcut-stories/status.json` | The count and how many stories you have not opened, for the bar widget to read |
 | `~/.cache/omarchy-shortcut-stories/seen.json` | The stories you have opened, so the badge only counts new ones |
+| `~/.cache/omarchy-shortcut-stories/shots/` | Screenshots and pasted images waiting for their story to be filed |
 | `~/.config/omarchy/shell.json` | The settings above, on the widget's entry. Team is stored as its id, so renaming a team in Shortcut does not unset it; a team name typed by hand still works. |
 
 The reference cache is re-read every six hours, and whenever the panel opens
@@ -344,6 +371,8 @@ and is reconciled ten seconds later.
 bin/shortcut refs | jq '[.groups[].name]'   # your teams
 bin/shortcut mine | jq '.stories[].name'    # what is assigned to you
 echo '{"name":"From the terminal"}' | bin/shortcut create
+echo '{"name":"Broken","files":["/tmp/shot.png"]}' | bin/shortcut create
+bin/shortcut shot --open                    # pick a region, open a new bug with it
 bin/shortcut pr https://github.com/owner/repo/pull/42
 bin/shortcut show 1234 | jq -r .story.description
 bin/shortcut move 1234 5002

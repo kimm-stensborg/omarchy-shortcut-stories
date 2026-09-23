@@ -197,6 +197,31 @@ Item {
       JSON.stringify(Model.buildCreateRequest(form, root.refs)), root.takeCreate)
   }
 
+  // Runs Omarchy's region picker through bin/shortcut shot and hands back
+  // the path it saved, or "" when the picker was cancelled.
+  function takeScreenshot(onDone) {
+    root.runWithStdin([root.cli, "shot"], root.cliEnvironment, "{}", function(text) {
+      var parsed = root.parse(text)
+      if (parsed && parsed.ok !== true) root.actionError = parsed.error || "The screenshot failed"
+      onDone(parsed && parsed.ok === true && parsed.path ? String(parsed.path) : "")
+    })
+  }
+
+  // An image on the clipboard, saved by bin/shortcut paste; "" when there is
+  // none. One at a time: Ctrl+V can reach both a field and the form.
+  property bool pastingImage: false
+
+  function pasteImage(onDone) {
+    if (root.pastingImage) return
+    root.pastingImage = true
+    root.runWithStdin([root.cli, "paste"], root.cliEnvironment, "{}", function(text) {
+      root.pastingImage = false
+      var parsed = root.parse(text)
+      if (parsed && parsed.ok !== true) root.actionError = parsed.error || "The clipboard image could not be read"
+      if (parsed && parsed.ok === true && parsed.path) onDone(String(parsed.path))
+    })
+  }
+
   // A fresh Process per call, rather than one reused Process piped each time.
   // Quickshell does not reliably reopen a stdin channel it has already closed
   // once on the same Process instance, so a second reuse can send the child
