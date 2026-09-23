@@ -227,6 +227,14 @@ comments, and to leave the Shortcut story where it is and not to push. In the
 checkout it creates the branch itself. In a worktree the branch is already
 checked out, and the prompt says so.
 
+Once an agent has the story, the story says where it has got to, under its
+title: `Agent working · sc-1234 · 3 commits · uncommitted changes`. Waiting
+for you and finished are in the accent colour, because both mean it is your
+turn. It is Herdr's status and what git says about `sc-<id>` in the agent's
+directory, checked every ten seconds while the story is open. Nothing leaves
+the machine to find it out. The line is only there while Herdr has an agent
+for that story.
+
 Herdr is optional. Without it, Solve says so and the rest of the panel is
 unchanged.
 
@@ -305,6 +313,7 @@ bin/shortcut pr https://github.com/owner/repo/pull/42
 bin/shortcut show 1234 | jq -r .story.description
 bin/shortcut move 1234 5002
 bin/solve workspaces | jq '.workspaces[].label'
+bin/solve status | jq '.agents[] | {name, status, branch}'
 ```
 
 `bin/solve start` reads one JSON object on stdin (`workspaceId`, `cwd`,
@@ -322,7 +331,7 @@ quotes, newlines and `$` in it survives.
 |------|------|
 | `manifest.json` | Plugin id, entry points, and the bar widget's settings schema |
 | `bin/shortcut` | The only thing that holds the token or speaks HTTP |
-| `bin/solve` | The only thing that talks to Herdr |
+| `bin/solve` | The only thing that talks to Herdr, and reads the agents' branches with git |
 | `Model.js` | Every pure decision: picker lists, the create body, the story list |
 | `Store.qml` | The service: one poller, one reference cache, every CLI call |
 | `Overlay.qml` | The card, the mode switch and the key handling |

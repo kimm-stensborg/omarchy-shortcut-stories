@@ -3,6 +3,7 @@
 #
 #   solve workspaces     the workspaces Herdr already has, with each one's cwd
 #   solve start          read one JSON object on stdin and start an agent there
+#   solve status         every agent Solve started, and how far its branch has got
 #
 # The object start reads is {workspaceId, cwd, worktree, kind, agent, branch,
 # prompt}. worktree true checks out branch sc-<id> beside the repo; false opens
@@ -179,8 +180,72 @@ cmd_start() {
     '{ok: true, prompted: true, focused: $focused, status: "working", where: $where, tabId: $tab, paneId: $pane}'
 }
 
+# What git says about one story's branch, seen from the agent's directory:
+# whether sc-<id> exists yet, how many commits it has on top of the branch it
+# came from, and -- when that directory has it checked out -- whether there is
+# work not committed. The base is origin's default branch where there is one,
+# else main or master; with none of those, ahead is left unknown rather than
+# counted against the wrong thing.
+branch_json() {
+  local dir=$1 branch=$2
+  if [[ -z $dir || ! -d $dir ]] || ! git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
+    jq -cn --arg branch "$branch" '{name: $branch, repo: false, exists: false, ahead: null, dirty: null, checkedOut: false}'
+    return
+  fi
+  local exists=false ahead=null dirty=null checked=false base="" current
+  if git -C "$dir" rev-parse --verify --quiet "refs/heads/$branch" >/dev/null; then
+    exists=true
+    base=$(git -C "$dir" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+    if [[ -z $base ]]; then
+      local b
+      for b in main master; do
+        if git -C "$dir" rev-parse --verify --quiet "refs/heads/$b" >/dev/null; then base=$b; break; fi
+      done
+    fi
+    if [[ -n $base ]]; then
+      ahead=$(git -C "$dir" rev-list --count "$base..refs/heads/$branch" 2>/dev/null) || ahead=null
+      [[ $ahead =~ ^[0-9]+$ ]] || ahead=null
+    fi
+  fi
+  current=$(git -C "$dir" branch --show-current 2>/dev/null)
+  if [[ $current == "$branch" ]]; then
+    checked=true
+    if [[ -n $(git -C "$dir" status --porcelain 2>/dev/null | head -1) ]]; then dirty=true; else dirty=false; fi
+  fi
+  jq -cn --arg branch "$branch" --arg base "$base" --argjson exists "$exists" --argjson ahead "$ahead" \
+    --argjson dirty "$dirty" --argjson checked "$checked" \
+    '{name: $branch, repo: true, exists: $exists, base: (if $base == "" then null else $base end),
+      ahead: $ahead, dirty: $dirty, checkedOut: $checked}'
+}
+
+# Every agent Solve named -- s<story id> -- with its Herdr status and its
+# branch. Agents Solve did not start are left out: this is about stories.
+# Local only: Herdr's socket and git, never the network, so it is cheap
+# enough to ask every few seconds.
+cmd_status() {
+  run_herdr agent list
+  require_herdr
+  jq -c '[.result.agents[]? | select((.name // "") | test("^s[0-9]+$"))
+          | {name, storyId: (.name[1:] | tonumber), status: (.agent_status // "unknown"),
+             cwd: (.foreground_cwd // .cwd // ""), paneId: (.pane_id // ""),
+             workspaceId: (.workspace_id // ""), focused: (.focused == true)}]' \
+    "$WORK/out.json" >"$WORK/agents.json" || fail "Herdr sent an agent list that could not be read" herdr
+
+  local row dir id branches="[]"
+  while IFS= read -r row; do
+    [[ -n $row ]] || continue
+    dir=$(jq -r .cwd <<<"$row")
+    id=$(jq -r .storyId <<<"$row")
+    branches=$(jq -c --argjson b "$(branch_json "$dir" "sc-$id")" '. + [$b]' <<<"$branches")
+  done < <(jq -c '.[]' "$WORK/agents.json")
+
+  jq -cn --slurpfile agents "$WORK/agents.json" --argjson branches "$branches" \
+    '{ok: true, agents: [$agents[0] | to_entries[] | .value + {branch: $branches[.key]}]}'
+}
+
 case ${1:-} in
   workspaces) cmd_workspaces ;;
   start) cmd_start ;;
-  *) fail "usage: solve workspaces | solve start" usage ;;
+  status) cmd_status ;;
+  *) fail "usage: solve workspaces | solve start | solve status" usage ;;
 esac

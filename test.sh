@@ -618,6 +618,41 @@ out=$(printf '%s' '{"workspaceId":"w9","kind":"nope","agent":"s1","branch":"sc-1
 is "an unknown agent is refused" "$(jq -r .code <<<"$out")" "usage"
 is "and herdr is not asked" "$(wc -l <"$WORK/herdr.log" | tr -d ' ')" "0"
 
+# status: a throwaway repo with main and sc-1234 two commits ahead, checked
+# out and with an edit not committed yet.
+REPO="$WORK/repo"
+git init -q -b main "$REPO"
+git -C "$REPO" -c user.name=t -c user.email=t@t commit -q --allow-empty -m base
+git -C "$REPO" checkout -q -b sc-1234
+git -C "$REPO" -c user.name=t -c user.email=t@t commit -q --allow-empty -m one
+git -C "$REPO" -c user.name=t -c user.email=t@t commit -q --allow-empty -m two
+echo wip >"$REPO/wip.txt"
+jq -cn --arg repo "$REPO" --arg plain "$WORK" '{result: {agents: [
+  {name: "s1234", agent_status: "working", cwd: $repo, pane_id: "w9:p3", workspace_id: "w9"},
+  {name: "s77", agent_status: "blocked", cwd: $plain, pane_id: "w9:p4", workspace_id: "w9"},
+  {name: "s88", agent_status: "done", cwd: $repo, pane_id: "w9:p5", workspace_id: "w9"},
+  {agent: "claude", agent_status: "idle", cwd: $repo, pane_id: "w9:p6"},
+  {name: "scratch", agent_status: "idle", cwd: $repo, pane_id: "w9:p7"}]}}' >"$FIX/agents.json"
+reset_herdr
+out=$(solve status)
+is "status succeeds"                   "$(jq -r .ok <<<"$out")" "true"
+is "only agents Solve named count"     "$(jq -r '[.agents[].name] | join(",")' <<<"$out")" "s1234,s77,s88"
+is "the story id is read off the name" "$(jq -r '.agents[0].storyId' <<<"$out")" "1234"
+is "with Herdr's status"               "$(jq -r '.agents[0].status' <<<"$out")" "working"
+is "the branch is found"               "$(jq -r '.agents[0].branch.exists' <<<"$out")" "true"
+is "counted against main"              "$(jq -r '.agents[0].branch.base' <<<"$out")" "main"
+is "two commits ahead"                 "$(jq -r '.agents[0].branch.ahead' <<<"$out")" "2"
+is "checked out there"                 "$(jq -r '.agents[0].branch.checkedOut' <<<"$out")" "true"
+is "with work not committed"           "$(jq -r '.agents[0].branch.dirty' <<<"$out")" "true"
+is "a directory that is no repo says so" "$(jq -r '.agents[1].branch.repo' <<<"$out")" "false"
+is "a branch not made yet is not there" "$(jq -r '.agents[2].branch.exists' <<<"$out")" "false"
+is "and its dirt is not guessed at"    "$(jq -r '.agents[2].branch.dirty' <<<"$out")" "null"
+is "status only asks Herdr for agents" "$(cat "$WORK/herdr.log")" "agent list"
+
+printf '%s\n' '{"result":{"agents":[]}}' >"$FIX/agents.json"
+out=$(solve status)
+is "no agents is an empty list, not an error" "$(jq -c .agents <<<"$out")" "[]"
+
 # ---- QML ------------------------------------------------------------------
 echo "qml"
 # The node cases below never touch the .qml files, and omarchy-shell swallows
@@ -1088,6 +1123,34 @@ cases.push(
   ["the agent name is the story", M.solveAgentName(18872), "s18872"],
   ["a blank id is no agent", M.solveAgentName(""), ""],
   ["a long id stays inside herdr's limit", M.solveAgentName("9".repeat(40)).length, 32],
+
+  // where Solve has got to
+  ["no status, no line",               M.solveProgress(null, 1234), null],
+  ["no agent for this story, no line", M.solveProgress({agents: [{storyId: 77, status: "working"}]}, 1234), null],
+  ["working, with commits",
+    M.solveProgress({agents: [{storyId: 1234, status: "working",
+      branch: {name: "sc-1234", repo: true, exists: true, ahead: 3, dirty: false}}]}, 1234).label,
+    "Agent working · sc-1234 · 3 commits"],
+  ["one commit is singular",
+    M.solveBranchLabel({name: "sc-1", repo: true, exists: true, ahead: 1}), "sc-1 · 1 commit"],
+  ["none yet says so",
+    M.solveBranchLabel({name: "sc-1", repo: true, exists: true, ahead: 0}), "sc-1 · no commits yet"],
+  ["work not committed is named",
+    M.solveBranchLabel({name: "sc-1", repo: true, exists: true, ahead: 2, dirty: true}), "sc-1 · 2 commits · uncommitted changes"],
+  ["an unknown count is left out, not zero",
+    M.solveBranchLabel({name: "sc-1", repo: true, exists: true, ahead: null}), "sc-1"],
+  ["a branch not made yet",
+    M.solveBranchLabel({name: "sc-1", repo: true, exists: false}), "no sc-1 yet"],
+  ["outside a repo, nothing about branches",
+    M.solveProgress({agents: [{storyId: 5, status: "blocked", branch: {name: "sc-5", repo: false}}]}, 5).label,
+    "Agent waiting for you"],
+  ["waiting wants you",                M.solveAgentState("blocked").attention, true],
+  ["finished wants you",               M.solveAgentState("idle").attention, true],
+  ["so does done",                     M.solveAgentState("done").label, "Agent finished"],
+  ["working does not",                 M.solveAgentState("working").attention, false],
+  ["a status Herdr invents later is still shown", M.solveAgentState("thinking").label, "Agent in Herdr"],
+  ["a story id as a string still matches",
+    M.solveAgentFor({agents: [{storyId: 1234}]}, "1234").storyId, 1234],
   ["the branch is the reference", M.solveBranch(18872), "sc-18872"],
   ["an empty workspace asks", M.solveTarget([{label:"kvittering"}], "").ask, true],
   ["a saved name does not", M.solveTarget([{id:"w2", label:"kvittering"}], "Kvittering").ask, false],

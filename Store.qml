@@ -498,6 +498,7 @@ Item {
       return
     }
     root.solveError = ""
+    root.refreshSolveStatus()
     if (parsed.focused === true) {
       root.solveReview = false
       root.solveReadyToClose()
@@ -506,6 +507,24 @@ Item {
     root.solveError = parsed.status === "blocked"
       ? "Herdr is waiting for an answer"
       : "The agent is in Herdr"
+  }
+
+  // Where each Solve agent has got to: Herdr's status and its branch, from
+  // bin/solve status. Local only -- Herdr's socket and git -- so it is asked
+  // every few seconds, but only while a story is open to show it on. A
+  // failure (no Herdr, Herdr not running) just means no line, not an error:
+  // Solve itself says what is wrong when you use it.
+  property var solveStatus: null
+
+  function refreshSolveStatus() {
+    if (solveStatusProc.running) return
+    solveStatusProc.command = [root.solveCli, "status"]
+    solveStatusProc.running = true
+  }
+
+  function takeSolveStatus(text) {
+    var parsed = root.parse(text)
+    root.solveStatus = parsed && parsed.ok === true ? parsed : null
   }
 
   function closeSolveReview() {
@@ -667,7 +686,20 @@ Item {
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.takeWorkspaces(text) }
   }
 
+  Process {
+    id: solveStatusProc
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.takeSolveStatus(text) }
+  }
+
   // ---- Timers.
+
+  Timer {
+    interval: 10000
+    repeat: true
+    running: root.detailFor !== 0
+    triggeredOnStart: true
+    onTriggered: root.refreshSolveStatus()
+  }
 
   Timer {
     id: poll

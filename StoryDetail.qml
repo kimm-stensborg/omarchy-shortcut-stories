@@ -31,6 +31,8 @@ Item {
 
   readonly property var detail: view.raw ? Model.storyDetail(view.raw, view.refs) : null
   readonly property var facts: Model.detailFacts(view.detail)
+  readonly property var solveProgress: view.detail && view.store
+    ? Model.solveProgress(view.store.solveStatus, view.detail.id) : null
   readonly property var moveStates: view.detail ? Model.statesForStory(view.refs, view.detail) : []
   property int stateCursor: -1
 
@@ -209,6 +211,19 @@ Item {
         foreground: view.muted
         fontFamily: view.fontFamily
         onClicked: view.copyPrLink()
+      }
+
+      // ---- Where the agent Solve started has got to. Only there when one
+      // has this story; waiting for you or finished is in the accent, since
+      // both mean it is your turn.
+      Text {
+        Layout.fillWidth: true
+        visible: !!view.solveProgress
+        elide: Text.ElideRight
+        text: view.solveProgress ? "󰚩  " + view.solveProgress.label : ""
+        color: view.solveProgress && view.solveProgress.attention ? view.accent : view.muted
+        font.family: view.fontFamily
+        font.pixelSize: Style.font.caption
       }
 
       Text {

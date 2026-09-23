@@ -1318,6 +1318,55 @@ function solveCaption(workspace, worktree, storyId) {
   return name ? "New tab in " + name : "New tab"
 }
 
+// ---- where Solve has got to.
+// bin/solve status lists every agent Solve started, by story. These turn one
+// of those into the line an open story shows, so the view holds no rules.
+
+function solveAgentFor(status, storyId) {
+  var list = (status && status.agents) || []
+  var wanted = solveId(storyId)
+  if (!wanted) return null
+  for (var i = 0; i < list.length; i++)
+    if (solveId(list[i] && list[i].storyId) === wanted) return list[i]
+  return null
+}
+
+// Herdr's word for the agent, in the panel's. Waiting and finished both want
+// you back, which is what attention marks; working does not.
+function solveAgentState(status) {
+  switch (str(status)) {
+    case "working": return { label: "Agent working", attention: false }
+    case "blocked": return { label: "Agent waiting for you", attention: true }
+    case "idle":
+    case "done": return { label: "Agent finished", attention: true }
+    default: return { label: "Agent in Herdr", attention: false }
+  }
+}
+
+function solveBranchLabel(branch) {
+  if (!branch || branch.repo !== true) return ""
+  var name = str(branch.name)
+  if (branch.exists !== true) return "no " + name + " yet"
+  var parts = [name]
+  var ahead = branch.ahead
+  if (typeof ahead === "number") parts.push(ahead === 0 ? "no commits yet" : ahead + (ahead === 1 ? " commit" : " commits"))
+  if (branch.dirty === true) parts.push("uncommitted changes")
+  return parts.join(" · ")
+}
+
+// The whole line for one open story, or null when no agent has it.
+function solveProgress(status, storyId) {
+  var agent = solveAgentFor(status, storyId)
+  if (!agent) return null
+  var state = solveAgentState(agent.status)
+  var branch = solveBranchLabel(agent.branch)
+  return {
+    label: branch ? state.label + " · " + branch : state.label,
+    attention: state.attention,
+    status: str(agent.status)
+  }
+}
+
 // What the bar shows next to the glyph. The same list the panel is showing:
 // the current sprint when that filter is on, otherwise everything assigned.
 function barLabel(stories, refs, mode, scope, todayIso) {
@@ -1371,6 +1420,8 @@ if (typeof module !== "undefined") {
     solveAgentName: solveAgentName, solveBranch: solveBranch,
     workspaceByLabel: workspaceByLabel, solveTarget: solveTarget,
     suggestWorkspace: suggestWorkspace, solveHaystack: solveHaystack,
-    solvePrompt: solvePrompt, solveCaption: solveCaption
+    solvePrompt: solvePrompt, solveCaption: solveCaption,
+    solveAgentFor: solveAgentFor, solveAgentState: solveAgentState,
+    solveBranchLabel: solveBranchLabel, solveProgress: solveProgress
   }
 }
