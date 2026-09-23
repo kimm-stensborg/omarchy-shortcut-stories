@@ -103,11 +103,20 @@ omarchy plugin remove io.github.kimm-stensborg.shortcut-stories
 Then delete the `-- Shortcut Stories overlay` block from
 `~/.config/hypr/bindings.lua`.
 
+## Working beside another window
+
+The panel sits over the middle of the screen but does not take it over:
+the rest stays clickable, and a click outside the panel does not close it.
+Click into the browser to copy a pull request's URL, and the browser has the
+keyboard; the panel's border fades to say so. `SUPER + ALT + T` -- or a click
+in one of its fields -- brings the keyboard back, and `Ctrl + V` pastes. Only
+`Esc`, or `SUPER + ALT + T` while the panel has the keyboard, closes it.
+
 ## Keys
 
 | Key | Does |
 |-----|------|
-| **SUPER + ALT + T** | Show the panel, ready to write. Again hides it. |
+| **SUPER + ALT + T** | Show the panel, ready to write. When it is up but another window has the keyboard, brings the keyboard back; when it has the keyboard, hides it. |
 | **SUPER + ALT + B** | Pick a region of the screen; a new bug opens with it. |
 | `Alt + S` | On the form: the panel steps aside while you pick a region, and comes back with it. |
 | `Ctrl + V` | On the form, with an image on the clipboard: adds it. Text still pastes as text. |

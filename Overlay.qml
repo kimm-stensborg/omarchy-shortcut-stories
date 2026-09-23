@@ -63,7 +63,11 @@ Item {
   readonly property color muted: Qt.darker(foreground, 1.5)
   readonly property color borderColor: Color.menu.border
   readonly property var borderSpec: Border.surfaceSpec("menu", "border", borderColor, Math.max(1, Style.space(2)))
-  readonly property color scrim: Color.menu.scrim
+  // The same border, faded, for while another window has the keyboard: the
+  // panel stays up beside it, and should not look like it is still taking
+  // what you type.
+  readonly property var idleBorderSpec: Border.surfaceSpec("menu", "border",
+    Qt.rgba(borderColor.r, borderColor.g, borderColor.b, 0.35), Math.max(1, Style.space(2)))
   readonly property color accent: Color.accent
   readonly property color urgent: Color.urgent
   readonly property int cornerRadius: Style.cornerRadius
@@ -151,6 +155,16 @@ Item {
   function open(payloadJson) {
     var payload = {}
     try { payload = JSON.parse(String(payloadJson || "{}")) || {} } catch (e) {}
+    // The panel stays up while you work in another window, so the key that
+    // summons it (an empty payload) does two things: it brings the keyboard
+    // back to a panel that is up but not focused, and closes one that has
+    // it. The bar and the screenshot key say what they want in the payload,
+    // and always get it.
+    if (root.opened && Object.keys(payload).length === 0) {
+      if (root.focused) root.dismiss()
+      else root.grabKeyboard()
+      return
+    }
     root.mode = payload.mode === "mine" || payload.mode === "settings"
       ? String(payload.mode)
       : (payload.mode === "compose" ? "compose" : root.defaultMode)
@@ -171,8 +185,24 @@ Item {
     var story = parseInt(payload.story, 10)
     if (root.mode === "mine" && isFinite(story) && story > 0 && root.store) root.store.showStory(story)
     root.opened = true
+    root.grabKeyboard()
     Qt.callLater(function() { root.focusPane() })
   }
+
+  // Whether this panel, rather than some other window, has the keyboard.
+  readonly property bool focused: root.opened && card.Window.active
+
+  // The panel takes the keyboard when it opens or is summoned back, but does
+  // not keep it: a click in the browser beside it goes to the browser, and
+  // a click back in a field comes back here. Hyprland only moves the keyboard
+  // to a layer on its own for a click, so a summon asks for it outright --
+  // exclusive for a moment, then on demand again.
+  property bool grabbing: false
+  function grabKeyboard() {
+    root.grabbing = true
+    releaseGrab.restart()
+  }
+  Timer { id: releaseGrab; interval: 200; onTriggered: root.grabbing = false }
 
   function close() {
     root.opened = false
@@ -325,32 +355,34 @@ Item {
   PanelWindow {
     id: panel
     visible: root.opened
-    anchors { top: true; bottom: true; left: true; right: true }
+    // No anchors: the layer is the card's size and Hyprland centres it, so
+    // the rest of the screen stays clickable -- the browser you are copying
+    // a URL out of, say. No scrim, and a click outside does not close it;
+    // Esc or the summon key does.
     color: "transparent"
+    implicitWidth: panel.cardWidth
+    implicitHeight: panel.cardHeight
     WlrLayershell.namespace: "omarchy-shortcut-stories"
     WlrLayershell.layer: WlrLayer.Overlay
-    WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+    WlrLayershell.keyboardFocus: root.grabbing ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.OnDemand
     exclusionMode: ExclusionMode.Ignore
-
-    Rectangle { anchors.fill: parent; color: root.scrim }
-    MouseArea { anchors.fill: parent; onClicked: root.dismiss() }
 
     // Fixed across modes. A card that resizes when you switch panes reads as a
     // different window opening rather than the same one turning over.
     // Wide enough to read a story title without it eliding, and to put a
     // description beside nothing else. The narrow card made the list a column
     // of truncated sentences.
-    readonly property int cardWidth: Math.min(Style.space(1120), panel.width - Style.gapsOut * 2)
-    readonly property int cardHeight: Math.min(Style.space(780), panel.height - Style.gapsOut * 2)
+    readonly property int screenWidth: panel.screen ? panel.screen.width : Style.space(1400)
+    readonly property int screenHeight: panel.screen ? panel.screen.height : Style.space(900)
+    readonly property int cardWidth: Math.min(Style.space(1120), panel.screenWidth - Style.gapsOut * 2)
+    readonly property int cardHeight: Math.min(Style.space(780), panel.screenHeight - Style.gapsOut * 2)
 
     BorderSurface {
       id: card
-      width: panel.cardWidth
-      height: panel.cardHeight
-      anchors.centerIn: parent
+      anchors.fill: parent
       radius: root.cornerRadius
       color: root.background
-      borderSpec: root.borderSpec
+      borderSpec: root.focused ? root.borderSpec : root.idleBorderSpec
       padding: root.contentMargin
 
       MouseArea { anchors.fill: parent; onClicked: {} }

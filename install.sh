@@ -172,7 +172,11 @@ write_binding() {
   {
     printf '\n%s\n' "$MARKER"
     [[ -z $conflict ]] || printf 'hl.unbind("%s")\n' "$combo"
-    printf 'o.bind("%s", "New Shortcut story", "omarchy-shell shell toggle %s '"'"'{}'"'"'")\n' "$combo" "$ID"
+    # summon, not toggle: the panel stays up while you work in another
+    # window, and the key has to bring the keyboard back to it then rather
+    # than close it. It closes the panel itself when it already has the
+    # keyboard (Overlay.open with an empty payload).
+    printf 'o.bind("%s", "New Shortcut story", "omarchy-shell shell summon %s '"'"'{}'"'"'")\n' "$combo" "$ID"
     # The installed path, not this checkout's: it is the same file whether
     # the plugin is a clone or a link, and it survives the checkout moving.
     [[ -z $shot ]] || printf 'o.bind("%s", "Shortcut bug from a screenshot", "%s shot --open")\n' \
