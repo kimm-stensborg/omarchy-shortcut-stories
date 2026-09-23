@@ -55,6 +55,13 @@ assigned to you since you last opened it. Opening the story clears that one.
 The stories already assigned the first time the plugin looks are not new, so
 the badge starts clear. Hovering the icon does not list them.
 
+A dot under the icon means an agent Solve started wants you back: red while
+one is waiting for an answer, the accent colour when one has finished. A
+click then opens that story rather than the list. An agent counts as seen
+once its story is open in the panel or its pane has focus in Herdr. It
+counts again if it goes back to work and stops again. Agents that were
+already waiting when the shell started do not light it.
+
 ### Your token
 
 The panel is locked until it has one. The first time you open it there is no
@@ -231,8 +238,10 @@ Once an agent has the story, the story says where it has got to, under its
 title: `Agent working · sc-1234 · 3 commits · uncommitted changes`. Waiting
 for you and finished are in the accent colour, because both mean it is your
 turn. It is Herdr's status and what git says about `sc-<id>` in the agent's
-directory, checked every ten seconds while the story is open. Nothing leaves
-the machine to find it out. The line is only there while Herdr has an agent
+directory, checked every ten seconds while a story is open or any Solve
+agent is running, and with the ordinary refresh otherwise. Nothing leaves
+the machine to find it out. The bar shows a dot when one of them wants you
+(see the bar, above). The line is only there while Herdr has an agent
 for that story.
 
 Herdr is optional. Without it, Solve says so and the rest of the panel is

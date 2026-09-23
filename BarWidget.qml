@@ -9,6 +9,7 @@ import "Model.js" as Model
 // overlay is the whole UI, and a compose form with three pickers has no
 // business in a popup anchored to a button twenty pixels across. A badge on
 // the glyph is the only extra: stories assigned since you last opened them.
+// And a dot under it when an agent Solve started wants you back.
 //
 // Nothing here polls. The bar instantiates this once per monitor, so a timer
 // in here would be one timer per screen; the service does it once instead.
@@ -54,19 +55,31 @@ BarWidget {
   // panel loaders -- but never into a bar widget, so root.shell is always
   // null here and calling summon on it silently did nothing. The keybinding's
   // own route works from anywhere, so the widget takes that.
-  function summon(mode) {
+  function summon(mode, story) {
+    var payload = { mode: mode }
+    if (story) payload.story = story
     Quickshell.execDetached(["omarchy-shell", "shell", "summon", root.pluginId,
-                             JSON.stringify({ mode: mode })])
+                             JSON.stringify(payload)])
   }
 
   readonly property int unseen: root.needsToken ? 0 : (parseInt(root.status.unseen, 10) || 0)
+
+  // Solve agents that are waiting for you, or finished, and that you have not
+  // looked at since. Waiting wins the colour: that agent is stuck until you
+  // answer, a finished one is not.
+  readonly property var solve: root.status.solve || ({})
+  readonly property int agentsWaiting: parseInt(root.solve.waiting, 10) || 0
+  readonly property int agentsFinished: parseInt(root.solve.finished, 10) || 0
+  readonly property bool agentsWantYou: root.agentsWaiting + root.agentsFinished > 0
 
   // The panel does the work. A widget that cannot see the service cannot act
   // on it either, so every button summons the panel rather than half of them
   // silently doing nothing.
   function press(button) {
     if (root.needsToken) { root.summon("mine"); return }
-    root.summon(button === Qt.MiddleButton ? "compose" : "mine")
+    if (button === Qt.MiddleButton) { root.summon("compose"); return }
+    // An agent that wants you is why you clicked, so its story opens.
+    root.summon("mine", root.agentsWantYou ? root.solve.storyId : 0)
   }
 
   readonly property int labelGap: Style.space(5)
@@ -119,6 +132,20 @@ BarWidget {
           font.pixelSize: Math.max(7, Style.font.caption - 2)
           font.bold: true
         }
+      }
+
+      // Bottom corner, so it never sits on the unseen badge above it.
+      Rectangle {
+        visible: root.agentsWantYou && !root.needsToken
+        enabled: false
+        anchors.right: button.right
+        anchors.bottom: button.bottom
+        anchors.rightMargin: Style.space(2)
+        anchors.bottomMargin: Style.space(3)
+        width: Style.space(6)
+        height: width
+        radius: width / 2
+        color: root.agentsWaiting > 0 ? Color.urgent : Color.accent
       }
     }
 

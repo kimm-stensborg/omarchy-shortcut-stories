@@ -1367,6 +1367,53 @@ function solveProgress(status, storyId) {
   }
 }
 
+// Which Solve agents want you back and have not been looked at since they
+// got there. Waiting and finished both count; working does not. An agent
+// whose pane has focus in Herdr is being looked at already. acked maps an
+// agent's name to the state_change_seq it was last seen at, so an agent that
+// goes back to work and then stops again counts again.
+function solveNeedsYou(status, acked) {
+  var list = (status && status.agents) || []
+  var seen = acked || {}
+  return list.filter(function(a) {
+    if (!a || !solveAgentState(a.status).attention) return false
+    if (a.focused === true) return false
+    return seen[str(a.name)] !== a.seq
+  })
+}
+
+// acked brought up to date against a fresh status: agents that are gone are
+// forgotten, and every agent that is focused, or whose story id is in
+// lookedAt, is marked seen at the state it is in now.
+function solveAcks(acked, status, lookedAt) {
+  var list = (status && status.agents) || []
+  var ids = (lookedAt || []).map(solveId)
+  var next = {}
+  for (var i = 0; i < list.length; i++) {
+    var a = list[i]
+    if (!a) continue
+    var name = str(a.name)
+    if (a.focused === true || ids.indexOf(solveId(a.storyId)) !== -1) next[name] = a.seq
+    else if (acked && Object.prototype.hasOwnProperty.call(acked, name)) next[name] = acked[name]
+  }
+  return next
+}
+
+// What the bar needs: how many are waiting, how many finished, and the story
+// a click should open -- a waiting one before a finished one, since a
+// blocked agent is stuck until you answer and a finished one is not.
+function solveBarStatus(status, acked) {
+  var list = solveNeedsYou(status, acked)
+  var waiting = list.filter(function(a) { return str(a.status) === "blocked" })
+  var finished = list.filter(function(a) { return str(a.status) !== "blocked" })
+  var first = waiting.length ? waiting[0] : (finished.length ? finished[0] : null)
+  return {
+    waiting: waiting.length,
+    finished: finished.length,
+    storyId: first ? first.storyId : null
+  }
+}
+
 // What the bar shows next to the glyph. The same list the panel is showing:
 // the current sprint when that filter is on, otherwise everything assigned.
 function barLabel(stories, refs, mode, scope, todayIso) {
@@ -1422,6 +1469,7 @@ if (typeof module !== "undefined") {
     suggestWorkspace: suggestWorkspace, solveHaystack: solveHaystack,
     solvePrompt: solvePrompt, solveCaption: solveCaption,
     solveAgentFor: solveAgentFor, solveAgentState: solveAgentState,
-    solveBranchLabel: solveBranchLabel, solveProgress: solveProgress
+    solveBranchLabel: solveBranchLabel, solveProgress: solveProgress,
+    solveNeedsYou: solveNeedsYou, solveAcks: solveAcks, solveBarStatus: solveBarStatus
   }
 }

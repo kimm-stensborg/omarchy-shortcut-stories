@@ -228,7 +228,8 @@ cmd_status() {
   jq -c '[.result.agents[]? | select((.name // "") | test("^s[0-9]+$"))
           | {name, storyId: (.name[1:] | tonumber), status: (.agent_status // "unknown"),
              cwd: (.foreground_cwd // .cwd // ""), paneId: (.pane_id // ""),
-             workspaceId: (.workspace_id // ""), focused: (.focused == true)}]' \
+             workspaceId: (.workspace_id // ""), focused: (.focused == true),
+             seq: (.state_change_seq // 0)}]' \
     "$WORK/out.json" >"$WORK/agents.json" || fail "Herdr sent an agent list that could not be read" herdr
 
   local row dir id branches="[]"

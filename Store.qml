@@ -511,10 +511,23 @@ Item {
 
   // Where each Solve agent has got to: Herdr's status and its branch, from
   // bin/solve status. Local only -- Herdr's socket and git -- so it is asked
-  // every few seconds, but only while a story is open to show it on. A
-  // failure (no Herdr, Herdr not running) just means no line, not an error:
-  // Solve itself says what is wrong when you use it.
+  // every ten seconds, but only while there are Solve agents to follow or a
+  // story is open to show it on; otherwise with the ordinary poll. A failure
+  // (no Herdr, Herdr not running) just means no line, not an error: Solve
+  // itself says what is wrong when you use it.
   property var solveStatus: null
+  readonly property bool hasSolveAgents: !!(root.solveStatus
+    && root.solveStatus.agents && root.solveStatus.agents.length)
+
+  // Whether the overlay is on screen. Set by the overlay: a story left open
+  // behind a hidden panel is not one you are looking at.
+  property bool panelOpen: false
+
+  // Agent name -> the state it was last looked at in (Model.solveAcks). The
+  // first answer after the shell starts is the baseline: an agent that was
+  // already finished before a restart is not news.
+  property var solveAcked: ({})
+  property bool solveBaselined: false
 
   function refreshSolveStatus() {
     if (solveStatusProc.running) return
@@ -525,7 +538,27 @@ Item {
   function takeSolveStatus(text) {
     var parsed = root.parse(text)
     root.solveStatus = parsed && parsed.ok === true ? parsed : null
+    if (!root.solveStatus) return
+    var looked = root.solveBaselined
+      ? root.lookingAt()
+      : root.solveStatus.agents.map(function(a) { return a.storyId })
+    root.solveBaselined = true
+    root.solveAcked = Model.solveAcks(root.solveAcked, root.solveStatus, looked)
   }
+
+  // The story in front of you right now, if any.
+  function lookingAt() {
+    return root.panelOpen && root.detailFor ? [root.detailFor] : []
+  }
+
+  function ackOpenStory() {
+    if (!root.solveStatus) return
+    root.solveAcked = Model.solveAcks(root.solveAcked, root.solveStatus, root.lookingAt())
+  }
+
+  onPanelOpenChanged: root.ackOpenStory()
+  onDetailForChanged: root.ackOpenStory()
+  onSolveAckedChanged: root.publishStatus()
 
   function closeSolveReview() {
     root.solveReview = false
@@ -585,12 +618,20 @@ Item {
     var started = Model.startedCount(visible, root.refs)
     var locked = !!(root.failure
       && (root.failure.code === "notoken" || root.failure.code === "auth"))
-    statusFile.setText(JSON.stringify({
+    var text = JSON.stringify({
       count: open, started: started, unseen: unseen, locked: locked,
       stale: root.stale,
-      error: root.failure && !locked ? String(root.failure.error) : ""
-    }))
+      error: root.failure && !locked ? String(root.failure.error) : "",
+      solve: Model.solveBarStatus(root.solveStatus, root.solveAcked)
+    })
+    // Solve status arrives every ten seconds and mostly says nothing new.
+    // Rewriting the same bytes would wake every bar widget for nothing.
+    if (text === root.publishedStatus) return
+    root.publishedStatus = text
+    statusFile.setText(text)
   }
+
+  property string publishedStatus: ""
 
   onStoriesChanged: root.publishStatus()
   onRefsChanged: root.publishStatus()
@@ -696,7 +737,7 @@ Item {
   Timer {
     interval: 10000
     repeat: true
-    running: root.detailFor !== 0
+    running: root.configLoaded && (root.hasSolveAgents || (root.panelOpen && root.detailFor !== 0))
     triggeredOnStart: true
     onTriggered: root.refreshSolveStatus()
   }
@@ -710,6 +751,9 @@ Item {
     onTriggered: {
       root.ensureRefs()
       if (root.refs) root.refreshStories()
+      // Picks up agents Solve did not start in this session -- one left
+      // running across a shell restart -- without polling Herdr all day.
+      root.refreshSolveStatus()
     }
   }
 
@@ -732,7 +776,10 @@ Item {
     }
   }
 
-  onConfigLoadedChanged: if (root.configLoaded) root.refreshRefs(false)
+  onConfigLoadedChanged: if (root.configLoaded) {
+    root.refreshRefs(false)
+    root.refreshSolveStatus()
+  }
 
   // Demo mode changes what the CLI is, not just what it says, so the cached
   // answer from before the switch is not an answer to the question now.

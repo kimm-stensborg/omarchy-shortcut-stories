@@ -647,6 +647,7 @@ is "with work not committed"           "$(jq -r '.agents[0].branch.dirty' <<<"$o
 is "a directory that is no repo says so" "$(jq -r '.agents[1].branch.repo' <<<"$out")" "false"
 is "a branch not made yet is not there" "$(jq -r '.agents[2].branch.exists' <<<"$out")" "false"
 is "and its dirt is not guessed at"    "$(jq -r '.agents[2].branch.dirty' <<<"$out")" "null"
+is "Herdr's change count rides along"  "$(jq -r '.agents[0].seq' <<<"$out")" "0"
 is "status only asks Herdr for agents" "$(cat "$WORK/herdr.log")" "agent list"
 
 printf '%s\n' '{"result":{"agents":[]}}' >"$FIX/agents.json"
@@ -1149,6 +1150,36 @@ cases.push(
   ["so does done",                     M.solveAgentState("done").label, "Agent finished"],
   ["working does not",                 M.solveAgentState("working").attention, false],
   ["a status Herdr invents later is still shown", M.solveAgentState("thinking").label, "Agent in Herdr"],
+  // which agents want you back
+  ["a finished agent wants you",
+    M.solveNeedsYou({agents: [{name: "s1", storyId: 1, status: "idle", seq: 4}]}, {}).length, 1],
+  ["not once it was seen in that state",
+    M.solveNeedsYou({agents: [{name: "s1", storyId: 1, status: "idle", seq: 4}]}, {s1: 4}).length, 0],
+  ["but again after it worked and stopped",
+    M.solveNeedsYou({agents: [{name: "s1", storyId: 1, status: "idle", seq: 6}]}, {s1: 4}).length, 1],
+  ["a working one never does",
+    M.solveNeedsYou({agents: [{name: "s1", storyId: 1, status: "working", seq: 4}]}, {}).length, 0],
+  ["nor one you are looking at in Herdr",
+    M.solveNeedsYou({agents: [{name: "s1", storyId: 1, status: "blocked", seq: 4, focused: true}]}, {}).length, 0],
+  ["looking at a story marks its agent seen",
+    JSON.stringify(M.solveAcks({}, {agents: [{name: "s1", storyId: 1, seq: 4}, {name: "s2", storyId: 2, seq: 9}]}, [1])),
+    '{"s1":4}'],
+  ["a focused agent is marked seen too",
+    JSON.stringify(M.solveAcks({}, {agents: [{name: "s2", storyId: 2, seq: 9, focused: true}]}, [])), '{"s2":9}'],
+  ["what was seen before is kept",
+    JSON.stringify(M.solveAcks({s2: 3}, {agents: [{name: "s2", storyId: 2, seq: 9}]}, [])), '{"s2":3}'],
+  ["an agent that is gone is forgotten",
+    JSON.stringify(M.solveAcks({s9: 3}, {agents: []}, [])), "{}"],
+  ["the bar counts waiting and finished apart",
+    JSON.stringify(M.solveBarStatus({agents: [
+      {name: "s1", storyId: 1, status: "idle", seq: 1},
+      {name: "s2", storyId: 2, status: "blocked", seq: 1},
+      {name: "s3", storyId: 3, status: "done", seq: 1}]}, {})),
+    '{"waiting":1,"finished":2,"storyId":2}'],
+  ["a click opens a finished one when none wait",
+    M.solveBarStatus({agents: [{name: "s3", storyId: 3, status: "done", seq: 1}]}, {}).storyId, 3],
+  ["nothing wanting you, nothing to open",
+    JSON.stringify(M.solveBarStatus(null, {})), '{"waiting":0,"finished":0,"storyId":null}'],
   ["a story id as a string still matches",
     M.solveAgentFor({agents: [{storyId: 1234}]}, "1234").storyId, 1234],
   ["the branch is the reference", M.solveBranch(18872), "sc-18872"],

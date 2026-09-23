@@ -25,6 +25,7 @@ Item {
   readonly property var store: root.service
 
   property bool opened: false
+  onOpenedChanged: if (root.store) root.store.panelOpen = root.opened
   property string mode: "compose"          // compose | mine | settings
   property var form: Model.emptyForm()
   // The edit form is a separate draft from the one above: opening an edit
@@ -141,6 +142,10 @@ Item {
     if (root.store) root.store.ensureRefs()
     if (root.mode === "settings" && root.store) root.store.refreshWorkspaces()
     if (!root.formSeeded || !root.draftDirty()) root.resetForm()
+    // The bar's click on an agent that wants you names its story, so the
+    // panel lands on it rather than on the list you would then search.
+    var story = parseInt(payload.story, 10)
+    if (root.mode === "mine" && isFinite(story) && story > 0 && root.store) root.store.showStory(story)
     root.opened = true
     Qt.callLater(function() { root.focusPane() })
   }
