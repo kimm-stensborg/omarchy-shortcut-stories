@@ -4,6 +4,7 @@
 #   solve workspaces     the workspaces Herdr already has, with each one's cwd
 #   solve start          read one JSON object on stdin and start an agent there
 #   solve status         every agent Solve started, and how far its branch has got
+#   solve pr             read {url, branch, dir} on stdin: the story's pull request, via gh
 #
 # The object start reads is {workspaceId, cwd, worktree, kind, agent, branch,
 # prompt}. worktree true checks out branch sc-<id> beside the repo; false opens
@@ -244,9 +245,61 @@ cmd_status() {
     '{ok: true, agents: [$agents[0] | to_entries[] | .value + {branch: $branches[.key]}]}'
 }
 
+# The fields gh is asked for, and what the panel is handed: GitHub's rollup
+# of checks and reviews folded down to one word each, so the view has
+# nothing to interpret. A check that failed in any way is failing; one still
+# queued or running is pending; none at all is none.
+PR_FIELDS=number,url,state,isDraft,title,reviewDecision,statusCheckRollup
+PR_SHAPE='def checks:
+    (.statusCheckRollup // []) as $all
+    | if ($all | length) == 0 then "none"
+      elif any($all[]; ((.conclusion // "") | IN("FAILURE","TIMED_OUT","CANCELLED","ACTION_REQUIRED","STARTUP_FAILURE"))
+                       or ((.state // "") | IN("FAILURE","ERROR"))) then "failing"
+      elif any($all[]; ((.status // "COMPLETED") != "COMPLETED") or ((.state // "") | IN("PENDING","EXPECTED"))) then "pending"
+      else "passing" end;
+  {number, url, title: (.title // ""), state: ((.state // "") | ascii_downcase),
+   draft: (.isDraft == true), checks: checks,
+   review: ((.reviewDecision // "") | ascii_downcase | if . == "" then "none" else . end)}'
+
+# A story's pull request. The link on the story wins when there is one: it
+# is what someone deliberately attached. Otherwise the branch Solve works
+# on, looked up from the agent's directory so gh knows which repository.
+# Either way it is gh that talks to GitHub; nothing here holds a token.
+cmd_pr() {
+  cat >"$WORK/body.json"
+  local url branch dir
+  url=$(jq -r '.url // ""' "$WORK/body.json" 2>/dev/null) || fail "pr needs a JSON object" usage
+  branch=$(jq -r '.branch // ""' "$WORK/body.json")
+  dir=$(jq -r '.dir // ""' "$WORK/body.json")
+
+  if [[ -n $url ]]; then
+    [[ $url =~ ^https://github\.com/[^/]+/[^/]+/pull/[0-9]+ ]] || fail "pr needs a GitHub pull request URL" usage
+  elif [[ -n $branch ]]; then
+    [[ $branch =~ ^sc-[0-9]+$ ]] || fail "pr needs a branch" usage
+    [[ -n $dir && -d $dir ]] && git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 ||
+      { jq -cn '{ok: true, pr: null}'; return; }
+  else
+    jq -cn '{ok: true, pr: null}'; return
+  fi
+
+  command -v gh >/dev/null 2>&1 || fail "Reading a pull request needs the GitHub CLI (gh)" missing
+
+  if [[ -n $url ]]; then
+    gh pr view "$url" --json "$PR_FIELDS" >"$WORK/pr.json" 2>"$WORK/pr.err" ||
+      fail "$(head -1 "$WORK/pr.err" | tr -d '\r')" github
+    jq -c "$PR_SHAPE | {ok: true, pr: .}" "$WORK/pr.json" || fail "gh sent a pull request that could not be read" github
+  else
+    (cd "$dir" && gh pr list --head "$branch" --state all --limit 1 --json "$PR_FIELDS") \
+      >"$WORK/pr.json" 2>"$WORK/pr.err" || fail "$(head -1 "$WORK/pr.err" | tr -d '\r')" github
+    jq -c "{ok: true, pr: (if length == 0 then null else (.[0] | $PR_SHAPE) end)}" "$WORK/pr.json" ||
+      fail "gh sent a pull request that could not be read" github
+  fi
+}
+
 case ${1:-} in
   workspaces) cmd_workspaces ;;
   start) cmd_start ;;
   status) cmd_status ;;
-  *) fail "usage: solve workspaces | solve start | solve status" usage ;;
+  pr) cmd_pr ;;
+  *) fail "usage: solve workspaces | solve start | solve status | solve pr" usage ;;
 esac

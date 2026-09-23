@@ -241,7 +241,16 @@ turn. It is Herdr's status and what git says about `sc-<id>` in the agent's
 directory, checked every ten seconds while a story is open or any Solve
 agent is running, and with the ordinary refresh otherwise. Nothing leaves
 the machine to find it out. The bar shows a dot when one of them wants you
-(see the bar, above). The line is only there while Herdr has an agent
+(see the bar, above).
+
+The story's pull request sits under its title with how it is doing:
+`acme/app#42  open · checks passing · waiting for review`. Red when a check
+failed or changes were asked for, the accent when it is merged or approved
+with everything green. It is the PR linked on the story, or else the one
+GitHub has for `sc-<id>`, looked up from the agent's directory -- so a PR the
+agent's branch got shows up without anyone linking it. It is read with `gh`
+when the story opens, as soon as the branch appears, and every two minutes
+while the story is on screen. The line is only there while Herdr has an agent
 for that story.
 
 Herdr is optional. Without it, Solve says so and the rest of the panel is
@@ -323,6 +332,7 @@ bin/shortcut show 1234 | jq -r .story.description
 bin/shortcut move 1234 5002
 bin/solve workspaces | jq '.workspaces[].label'
 bin/solve status | jq '.agents[] | {name, status, branch}'
+echo '{"url":"https://github.com/acme/app/pull/42"}' | bin/solve pr | jq .pr
 ```
 
 `bin/solve start` reads one JSON object on stdin (`workspaceId`, `cwd`,
@@ -340,7 +350,7 @@ quotes, newlines and `$` in it survives.
 |------|------|
 | `manifest.json` | Plugin id, entry points, and the bar widget's settings schema |
 | `bin/shortcut` | The only thing that holds the token or speaks HTTP |
-| `bin/solve` | The only thing that talks to Herdr, and reads the agents' branches with git |
+| `bin/solve` | The only thing that talks to Herdr; reads the agents' branches with git and their PRs with `gh` |
 | `Model.js` | Every pure decision: picker lists, the create body, the story list |
 | `Store.qml` | The service: one poller, one reference cache, every CLI call |
 | `Overlay.qml` | The card, the mode switch and the key handling |

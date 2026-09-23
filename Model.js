@@ -1414,6 +1414,45 @@ function solveBarStatus(status, acked) {
   }
 }
 
+// Where to look for a story's pull request: the link on the story when it
+// has one, since someone put it there on purpose; otherwise the sc-<id>
+// branch, from the directory of the agent working on it. null when there is
+// nowhere to look -- no link, and no branch yet.
+function prLookupFor(detail, status) {
+  if (!detail) return null
+  var linked = parseGithubPrUrl(firstPrLink(detail.externalLinks))
+  if (linked) return { url: linked.url }
+  var agent = solveAgentFor(status, detail.id)
+  if (agent && agent.branch && agent.branch.exists === true && str(agent.cwd) !== "")
+    return { branch: str(agent.branch.name), dir: str(agent.cwd) }
+  return null
+}
+
+// One line for a pull request, and whether it wants something from you.
+// Checks and reviews only matter while it is open; merged or closed says it
+// all. bad is red (a check failed, or changes were asked for), good is the
+// accent (merged, or approved with nothing failing or still running).
+function prStatusLabel(pr) {
+  if (!pr) return null
+  var state = str(pr.state)
+  var parts = ["PR #" + str(pr.number)]
+  var tone = "neutral"
+  if (state === "merged") { parts.push("merged"); tone = "good" }
+  else if (state === "closed") parts.push("closed")
+  else {
+    parts.push(pr.draft === true ? "draft" : "open")
+    var checks = { passing: "checks passing", failing: "checks failing", pending: "checks running" }[str(pr.checks)]
+    if (checks) parts.push(checks)
+    var review = { approved: "approved", changes_requested: "changes requested",
+                   review_required: "waiting for review" }[str(pr.review)]
+    if (review) parts.push(review)
+    if (pr.checks === "failing" || pr.review === "changes_requested") tone = "bad"
+    else if (pr.review === "approved" && pr.checks !== "pending") tone = "good"
+  }
+  // summary is the same without the number, for beside a link that has it.
+  return { label: parts.join(" · "), summary: parts.slice(1).join(" · "), tone: tone, url: str(pr.url) }
+}
+
 // What the bar shows next to the glyph. The same list the panel is showing:
 // the current sprint when that filter is on, otherwise everything assigned.
 function barLabel(stories, refs, mode, scope, todayIso) {
@@ -1470,6 +1509,7 @@ if (typeof module !== "undefined") {
     solvePrompt: solvePrompt, solveCaption: solveCaption,
     solveAgentFor: solveAgentFor, solveAgentState: solveAgentState,
     solveBranchLabel: solveBranchLabel, solveProgress: solveProgress,
-    solveNeedsYou: solveNeedsYou, solveAcks: solveAcks, solveBarStatus: solveBarStatus
+    solveNeedsYou: solveNeedsYou, solveAcks: solveAcks, solveBarStatus: solveBarStatus,
+    prLookupFor: prLookupFor, prStatusLabel: prStatusLabel
   }
 }

@@ -33,6 +33,11 @@ Item {
   readonly property var facts: Model.detailFacts(view.detail)
   readonly property var solveProgress: view.detail && view.store
     ? Model.solveProgress(view.store.solveStatus, view.detail.id) : null
+  // The story's pull request as GitHub has it now. Its link is the one on
+  // the story when there is one, else the PR found for Solve's branch.
+  readonly property var prStatus: view.store && view.detail ? Model.prStatusLabel(view.store.prStatus) : null
+  readonly property string prUrl: view.detail
+    ? (view.detail.prUrl || (view.prStatus ? view.prStatus.url : "")) : ""
   readonly property var moveStates: view.detail ? Model.statesForStory(view.refs, view.detail) : []
   property int stateCursor: -1
 
@@ -92,8 +97,8 @@ Item {
   // has to work with nothing open to edit.
   property bool prCopied: false
   function copyPrLink() {
-    if (!view.detail || !view.detail.prUrl) return
-    Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(view.detail.prUrl) + " | wl-copy"])
+    if (view.prUrl === "") return
+    Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(view.prUrl) + " | wl-copy"])
     view.prCopied = true
     prCopiedTimer.restart()
   }
@@ -202,15 +207,34 @@ Item {
       // ---- The linked PR, if there is one. A click copies the URL rather
       // than opening it -- Open above already does that for the story, and a
       // PR link is usually wanted to paste somewhere else, not to visit.
-      Button {
-        visible: !!(view.detail && view.detail.prUrl)
-        bordered: false
-        iconText: ""
-        text: view.detail ? Model.prRefLabel(view.detail.prUrl) : ""
-        tooltipText: view.prCopied ? "Copied!" : "Copy the pull request link"
-        foreground: view.muted
-        fontFamily: view.fontFamily
-        onClicked: view.copyPrLink()
+      // How it is doing sits beside it: red when a check failed or changes
+      // were asked for, the accent when it is merged or approved and green.
+      RowLayout {
+        Layout.fillWidth: true
+        visible: view.prUrl !== ""
+        spacing: Style.spacing.sm
+
+        Button {
+          bordered: false
+          iconText: ""
+          text: Model.prRefLabel(view.prUrl)
+          tooltipText: view.prCopied ? "Copied!" : "Copy the pull request link"
+          foreground: view.muted
+          fontFamily: view.fontFamily
+          onClicked: view.copyPrLink()
+        }
+
+        Text {
+          Layout.fillWidth: true
+          visible: !!view.prStatus
+          elide: Text.ElideRight
+          text: view.prStatus ? view.prStatus.summary : ""
+          color: !view.prStatus ? view.muted
+            : view.prStatus.tone === "bad" ? view.urgent
+            : view.prStatus.tone === "good" ? view.accent : view.muted
+          font.family: view.fontFamily
+          font.pixelSize: Style.font.caption
+        }
       }
 
       // ---- Where the agent Solve started has got to. Only there when one

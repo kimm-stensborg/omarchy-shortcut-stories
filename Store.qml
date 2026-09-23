@@ -556,6 +556,40 @@ Item {
     root.solveAcked = Model.solveAcks(root.solveAcked, root.solveStatus, root.lookingAt())
   }
 
+  // ---- The open story's pull request, from bin/solve pr (gh). Asked when
+  // the story opens, again the moment there is somewhere new to look (a link
+  // saved on it, or Solve's branch appearing), and every two minutes while
+  // it is on screen -- that part goes over the network, so it is not on the
+  // ten-second beat. A failed lookup keeps what was shown rather than
+  // blanking it: gh being slow is not news about the PR.
+  property var prStatus: null
+  property string prLookupKey: ""
+  property bool loadingPrStatus: false
+
+  function refreshPrStatus(force) {
+    var lookup = Model.prLookupFor(root.detail, root.solveStatus)
+    if (!lookup) { root.prStatus = null; root.prLookupKey = ""; return }
+    var key = JSON.stringify(lookup)
+    if (!force && key === root.prLookupKey) return
+    if (root.loadingPrStatus) return
+    root.prLookupKey = key
+    root.loadingPrStatus = true
+    var storyId = root.detail.id
+    root.runWithStdin([root.solveCli, "pr"], ({}), key, function(text) {
+      root.loadingPrStatus = false
+      // An answer for a story you have already left is not this one's.
+      if (root.detailFor !== storyId) return
+      var parsed = root.parse(text)
+      if (parsed && parsed.ok === true) root.prStatus = parsed.pr || null
+    })
+  }
+
+  onDetailChanged: {
+    if (!root.detail) { root.prStatus = null; root.prLookupKey = ""; return }
+    root.refreshPrStatus(false)
+  }
+  onSolveStatusChanged: if (root.detail) root.refreshPrStatus(false)
+
   onPanelOpenChanged: root.ackOpenStory()
   onDetailForChanged: root.ackOpenStory()
   onSolveAckedChanged: root.publishStatus()
@@ -733,6 +767,13 @@ Item {
   }
 
   // ---- Timers.
+
+  Timer {
+    interval: 120000
+    repeat: true
+    running: root.panelOpen && root.detailFor !== 0
+    onTriggered: root.refreshPrStatus(true)
+  }
 
   Timer {
     interval: 10000

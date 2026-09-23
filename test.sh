@@ -654,6 +654,66 @@ printf '%s\n' '{"result":{"agents":[]}}' >"$FIX/agents.json"
 out=$(solve status)
 is "no agents is an empty list, not an error" "$(jq -c .agents <<<"$out")" "[]"
 
+# pr: gh through a stand-in that records where it ran and what it was asked.
+cat >"$WORK/bin/gh" <<'SH'
+#!/bin/bash
+printf '%s | %s\n' "$PWD" "$*" >> "${GH_LOG:?}"
+case "$1 $2" in
+  "pr view") [[ -n ${GH_FAIL:-} ]] && { echo "GraphQL: Could not resolve to a PullRequest" >&2; exit 1; }
+             cat "$GH_FIX/view.json" ;;
+  "pr list") cat "$GH_FIX/list.json" ;;
+  *) exit 1 ;;
+esac
+SH
+chmod +x "$WORK/bin/gh"
+GHFIX="$WORK/gh-fix"; mkdir -p "$GHFIX"
+ghsolve() { PATH="$WORK/bin:$PATH" GH_LOG="$WORK/gh.log" GH_FIX="$GHFIX" GH_FAIL= "$SOLVE" pr; }
+: >"$WORK/gh.log"
+cat >"$GHFIX/view.json" <<'JSON'
+{"number":42,"url":"https://github.com/acme/app/pull/42","title":"Fix it","state":"OPEN","isDraft":false,
+ "reviewDecision":"CHANGES_REQUESTED",
+ "statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"},{"conclusion":"FAILURE","status":"COMPLETED"},{"status":"IN_PROGRESS"}]}
+JSON
+out=$(printf '%s' '{"url":"https://github.com/acme/app/pull/42","branch":"sc-1234","dir":"'"$REPO"'"}' | ghsolve)
+is "a linked PR is read"               "$(jq -r .pr.number <<<"$out")" "42"
+is "the link wins over the branch"     "$(grep -c 'pr view https://github.com/acme/app/pull/42' "$WORK/gh.log")" "1"
+is "one failed check makes it failing" "$(jq -r .pr.checks <<<"$out")" "failing"
+is "the review is one word"            "$(jq -r .pr.review <<<"$out")" "changes_requested"
+is "the state is lower case"           "$(jq -r .pr.state <<<"$out")" "open"
+
+: >"$WORK/gh.log"
+printf '%s\n' '[{"number":7,"url":"u","title":"t","state":"MERGED","isDraft":false,"reviewDecision":"","statusCheckRollup":[{"state":"SUCCESS"}]}]' >"$GHFIX/list.json"
+out=$(printf '%s' '{"branch":"sc-1234","dir":"'"$REPO"'"}' | ghsolve)
+is "without a link the branch is looked up" "$(jq -r .pr.number <<<"$out")" "7"
+has "in the agent's repository"        "$(cat "$WORK/gh.log")" "$REPO | pr list --head sc-1234 --state all"
+is "all green is passing"              "$(jq -r .pr.checks <<<"$out")" "passing"
+is "no review decision is none"        "$(jq -r .pr.review <<<"$out")" "none"
+
+printf '%s\n' '[{"number":8,"url":"u","state":"OPEN","isDraft":true,"statusCheckRollup":[{"conclusion":"SUCCESS"},{"state":"PENDING"}]}]' >"$GHFIX/list.json"
+out=$(printf '%s' '{"branch":"sc-1234","dir":"'"$REPO"'"}' | ghsolve)
+is "a check still running is pending"  "$(jq -r .pr.checks <<<"$out")" "pending"
+is "a draft says so"                   "$(jq -r .pr.draft <<<"$out")" "true"
+
+printf '%s\n' '[]' >"$GHFIX/list.json"
+out=$(printf '%s' '{"branch":"sc-1234","dir":"'"$REPO"'"}' | ghsolve)
+is "no PR for the branch is null, not an error" "$(jq -c .pr <<<"$out")" "null"
+
+: >"$WORK/gh.log"
+out=$(printf '%s' '{"branch":"sc-1234","dir":"'"$WORK/nowhere"'"}' | ghsolve)
+is "no repository, no PR"              "$(jq -c .pr <<<"$out")" "null"
+out=$(printf '%s' '{}' | ghsolve)
+is "nothing to look up, no PR"         "$(jq -c .pr <<<"$out")" "null"
+is "and gh is not asked for either"    "$(wc -l <"$WORK/gh.log" | tr -d ' ')" "0"
+
+out=$(printf '%s' '{"url":"https://example.com/x"}' | ghsolve)
+is "a link that is not a GitHub PR is refused" "$(jq -r .code <<<"$out")" "usage"
+out=$(printf '%s' '{"branch":"main","dir":"'"$REPO"'"}' | ghsolve)
+is "only a story branch is looked up"  "$(jq -r .code <<<"$out")" "usage"
+out=$(printf '%s' '{"url":"https://github.com/acme/app/pull/42"}' \
+  | PATH="$WORK/bin:$PATH" GH_LOG="$WORK/gh.log" GH_FIX="$GHFIX" GH_FAIL=1 "$SOLVE" pr)
+is "gh failing is a github error"      "$(jq -r .code <<<"$out")" "github"
+has "with what gh said"                "$(jq -r .error <<<"$out")" "Could not resolve"
+
 # ---- QML ------------------------------------------------------------------
 echo "qml"
 # The node cases below never touch the .qml files, and omarchy-shell swallows
@@ -1180,6 +1240,35 @@ cases.push(
     M.solveBarStatus({agents: [{name: "s3", storyId: 3, status: "done", seq: 1}]}, {}).storyId, 3],
   ["nothing wanting you, nothing to open",
     JSON.stringify(M.solveBarStatus(null, {})), '{"waiting":0,"finished":0,"storyId":null}'],
+  // which pull request, and how it is doing
+  ["a linked PR is looked up by its link, cleaned",
+    JSON.stringify(M.prLookupFor({id: 1, externalLinks: ["https://figma.com/x", "https://github.com/a/b/pull/9/files"]}, null)),
+    '{"url":"https://github.com/a/b/pull/9"}'],
+  ["the link wins over a branch",
+    M.prLookupFor({id: 1, externalLinks: ["https://github.com/a/b/pull/9"]},
+      {agents: [{storyId: 1, cwd: "/r", branch: {name: "sc-1", exists: true}}]}).url, "https://github.com/a/b/pull/9"],
+  ["without one, the agent's branch where it works",
+    JSON.stringify(M.prLookupFor({id: 1, externalLinks: []},
+      {agents: [{storyId: 1, cwd: "/r", branch: {name: "sc-1", exists: true}}]})),
+    '{"branch":"sc-1","dir":"/r"}'],
+  ["a branch not made yet has nothing to find",
+    M.prLookupFor({id: 1}, {agents: [{storyId: 1, cwd: "/r", branch: {name: "sc-1", exists: false}}]}), null],
+  ["no link and no agent, nowhere to look",  M.prLookupFor({id: 1}, null), null],
+  ["an open PR with its checks and review",
+    M.prStatusLabel({number: 42, state: "open", checks: "passing", review: "review_required"}).label,
+    "PR #42 · open · checks passing · waiting for review"],
+  ["the summary leaves the number to the link beside it",
+    M.prStatusLabel({number: 42, state: "open", checks: "failing"}).summary, "open · checks failing"],
+  ["a failed check is bad",       M.prStatusLabel({number: 1, state: "open", checks: "failing"}).tone, "bad"],
+  ["so are changes asked for",    M.prStatusLabel({number: 1, state: "open", checks: "passing", review: "changes_requested"}).tone, "bad"],
+  ["approved and green is good",  M.prStatusLabel({number: 1, state: "open", checks: "passing", review: "approved"}).tone, "good"],
+  ["approved, still running, is not yet",
+    M.prStatusLabel({number: 1, state: "open", checks: "pending", review: "approved"}).tone, "neutral"],
+  ["a draft says so",             M.prStatusLabel({number: 3, state: "open", draft: true, checks: "none", review: "none"}).label, "PR #3 · draft"],
+  ["merged says only that",       M.prStatusLabel({number: 9, state: "merged", checks: "failing"}).label, "PR #9 · merged"],
+  ["and is good",                 M.prStatusLabel({number: 9, state: "merged"}).tone, "good"],
+  ["closed is neither",           M.prStatusLabel({number: 9, state: "closed"}).tone, "neutral"],
+  ["no PR, no line",              M.prStatusLabel(null), null],
   ["a story id as a string still matches",
     M.solveAgentFor({agents: [{storyId: 1234}]}, "1234").storyId, 1234],
   ["the branch is the reference", M.solveBranch(18872), "sc-18872"],
