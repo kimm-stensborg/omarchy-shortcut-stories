@@ -5,6 +5,7 @@
 #   solve start          read one JSON object on stdin and start an agent there
 #   solve status         every agent Solve started, and how far its branch has got
 #   solve pr             read {url, branch, dir} on stdin: the story's pull request, via gh
+#   solve open-pr        read {dir, branch, base, title, body, draft}: push the branch, open its PR
 #
 # The object start reads is {workspaceId, cwd, worktree, kind, agent, branch,
 # prompt}. worktree true checks out branch sc-<id> beside the repo; false opens
@@ -296,10 +297,53 @@ cmd_pr() {
   fi
 }
 
+# Pushes sc-<id> to origin and opens its pull request. The panel only calls
+# this after you have read what it is about to send and pressed Enter: the
+# agent was told not to push, so this is the one place that does. It pushes
+# the branch by name, whichever directory has it checked out, and never with
+# --force: a push GitHub refuses stops here, with git's reason. base empty
+# means the repository's default branch.
+cmd_open_pr() {
+  cat >"$WORK/body.json"
+  local dir branch base title draft
+  dir=$(jq -r '.dir // ""' "$WORK/body.json" 2>/dev/null) || fail "open-pr needs a JSON object" usage
+  branch=$(jq -r '.branch // ""' "$WORK/body.json")
+  base=$(jq -r '.base // ""' "$WORK/body.json")
+  title=$(jq -r '.title // "" | gsub("^\\s+|\\s+$"; "")' "$WORK/body.json")
+  draft=$(jq -r '.draft == true' "$WORK/body.json")
+  jq -r '.body // ""' "$WORK/body.json" >"$WORK/pr-body.md"
+
+  [[ $branch =~ ^sc-[0-9]+$ ]] || fail "open-pr needs a story branch" usage
+  [[ -n $title ]] || fail "A pull request needs a title" usage
+  [[ -z $base || $base =~ ^[A-Za-z0-9._/-]+$ ]] || fail "open-pr needs a base branch name" usage
+  [[ -n $dir && -d $dir ]] && git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 ||
+    fail "That directory is not a git repository" git
+  git -C "$dir" rev-parse --verify --quiet "refs/heads/$branch" >/dev/null ||
+    fail "There is no $branch branch to push" git
+  git -C "$dir" remote get-url origin >/dev/null 2>&1 || fail "The repository has no origin to push to" git
+  command -v gh >/dev/null 2>&1 || fail "Opening a pull request needs the GitHub CLI (gh)" missing
+
+  if ! git -C "$dir" push --quiet -u origin "refs/heads/$branch:refs/heads/$branch" 2>"$WORK/push.err"; then
+    fail "Pushing $branch failed: $(grep -v '^\s*$' "$WORK/push.err" | tail -1)" git
+  fi
+
+  local -a args=(pr create --head "$branch" --title "$title" --body-file "$WORK/pr-body.md")
+  [[ -n $base ]] && args+=(--base "$base")
+  [[ $draft == true ]] && args+=(--draft)
+  if ! (cd "$dir" && gh "${args[@]}") >"$WORK/created.txt" 2>"$WORK/pr.err"; then
+    fail "The branch is pushed, but gh could not open the pull request: $(head -1 "$WORK/pr.err" | tr -d '\r')" github
+  fi
+  local url
+  url=$(grep -oE 'https://github\.com/[^[:space:]]+/pull/[0-9]+' "$WORK/created.txt" | tail -1)
+  [[ -n $url ]] || fail "gh did not say where the pull request is" github
+  jq -cn --arg url "$url" '{ok: true, url: $url, number: ($url | capture("/pull/(?<n>[0-9]+)$").n | tonumber)}'
+}
+
 case ${1:-} in
   workspaces) cmd_workspaces ;;
   start) cmd_start ;;
   status) cmd_status ;;
   pr) cmd_pr ;;
-  *) fail "usage: solve workspaces | solve start | solve status | solve pr" usage ;;
+  open-pr) cmd_open_pr ;;
+  *) fail "usage: solve workspaces | solve start | solve status | solve pr | solve open-pr" usage ;;
 esac

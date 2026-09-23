@@ -1453,6 +1453,78 @@ function prStatusLabel(pr) {
   return { label: parts.join(" · "), summary: parts.slice(1).join(" · "), tone: tone, url: str(pr.url) }
 }
 
+// ---- opening the pull request.
+
+// Whether Alt+P has anything to do, and if not, the one reason why -- said
+// in the panel rather than leaving a key that silently does nothing.
+//
+// known is whether GitHub has answered the question "is there a PR already"
+// for this branch; false means the answer is still coming. Left out, the PR
+// passed in is taken as the answer.
+function prOpenable(status, detail, pr, known) {
+  if (!detail) return { ok: false, reason: "" }
+  if (pr) return { ok: false, reason: "It already has PR #" + str(pr.number) }
+  var agent = solveAgentFor(status, detail.id)
+  var branch = solveBranch(detail.id)
+  if (!agent) return { ok: false, reason: "No agent has " + branch + " — Alt+A starts one" }
+  var b = agent.branch
+  if (!b || b.repo !== true) return { ok: false, reason: "The agent is not working in a git repository" }
+  if (b.exists !== true) return { ok: false, reason: "There is no " + branch + " branch yet" }
+  if (b.ahead === 0) return { ok: false, reason: branch + " has no commits yet" }
+  if (known === false) return { ok: false, reason: "GitHub has not said yet whether " + branch + " has a pull request" }
+  return { ok: true, reason: "" }
+}
+
+// What the review screen starts with. The title is the story's name -- a PR
+// titled after the work it does. The body links back to the story; the ref
+// in it is also what Shortcut's GitHub integration looks for. base is the
+// branch it was counted against, without the remote in front, or empty to
+// let GitHub use the repository's default.
+function prDraft(detail, status) {
+  var agent = solveAgentFor(status, detail && detail.id)
+  var b = (agent && agent.branch) || {}
+  var branch = solveBranch(detail && detail.id)
+  var url = str(detail && detail.appUrl)
+  return {
+    dir: str(agent && agent.cwd),
+    branch: branch,
+    base: str(b.base).replace(/^origin\//, ""),
+    title: trim(detail && detail.name),
+    body: "Shortcut story " + (url ? "[" + branch + "](" + url + ")" : branch) + ".",
+    draft: false,
+    ahead: typeof b.ahead === "number" ? b.ahead : null,
+    dirty: b.dirty === true
+  }
+}
+
+// The story's links with the new PR added, once. Every link it already had
+// stays, in its place.
+function withPrLink(links, url) {
+  var list = (links || []).slice()
+  var added = parseGithubPrUrl(url)
+  var want = added ? added.url : trim(url)
+  if (want === "") return list
+  for (var i = 0; i < list.length; i++) {
+    var have = parseGithubPrUrl(list[i])
+    if ((have ? have.url : trim(list[i])) === want) return list
+  }
+  list.push(want)
+  return list
+}
+
+// Where the story probably goes once its PR is up: the next in-progress
+// state after the one it is in, in its own workflow -- Code Review after
+// In Development, say. null when there is none; the panel then suggests
+// nothing rather than guess at done.
+function stateAfterPr(refs, detail) {
+  var states = statesForStory(refs, detail)
+  var at = -1
+  for (var i = 0; i < states.length; i++) if (states[i].id === (detail && detail.workflowStateId)) at = i
+  if (at < 0) return null
+  for (var j = at + 1; j < states.length; j++) if (str(states[j].type) === "started") return states[j]
+  return null
+}
+
 // What the bar shows next to the glyph. The same list the panel is showing:
 // the current sprint when that filter is on, otherwise everything assigned.
 function barLabel(stories, refs, mode, scope, todayIso) {
@@ -1510,6 +1582,7 @@ if (typeof module !== "undefined") {
     solveAgentFor: solveAgentFor, solveAgentState: solveAgentState,
     solveBranchLabel: solveBranchLabel, solveProgress: solveProgress,
     solveNeedsYou: solveNeedsYou, solveAcks: solveAcks, solveBarStatus: solveBarStatus,
-    prLookupFor: prLookupFor, prStatusLabel: prStatusLabel
+    prLookupFor: prLookupFor, prStatusLabel: prStatusLabel,
+    prOpenable: prOpenable, prDraft: prDraft, withPrLink: withPrLink, stateAfterPr: stateAfterPr
   }
 }

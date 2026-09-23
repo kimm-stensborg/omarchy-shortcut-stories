@@ -662,6 +662,13 @@ case "$1 $2" in
   "pr view") [[ -n ${GH_FAIL:-} ]] && { echo "GraphQL: Could not resolve to a PullRequest" >&2; exit 1; }
              cat "$GH_FIX/view.json" ;;
   "pr list") cat "$GH_FIX/list.json" ;;
+  "pr create")
+    [[ -n ${GH_FAIL:-} ]] && { echo "a pull request for branch already exists" >&2; exit 1; }
+    while [[ $# -gt 0 ]]; do
+      [[ $1 == --body-file ]] && cp "$2" "$GH_FIX/created-body.md"
+      shift
+    done
+    printf 'Creating pull request\nhttps://github.com/acme/app/pull/77\n' ;;
   *) exit 1 ;;
 esac
 SH
@@ -713,6 +720,51 @@ out=$(printf '%s' '{"url":"https://github.com/acme/app/pull/42"}' \
   | PATH="$WORK/bin:$PATH" GH_LOG="$WORK/gh.log" GH_FIX="$GHFIX" GH_FAIL=1 "$SOLVE" pr)
 is "gh failing is a github error"      "$(jq -r .code <<<"$out")" "github"
 has "with what gh said"                "$(jq -r .error <<<"$out")" "Could not resolve"
+
+# open-pr: pushes to a bare origin next to the throwaway repo, then gh.
+git init -q --bare "$WORK/origin.git"
+git -C "$REPO" remote add origin "$WORK/origin.git"
+git -C "$REPO" push -q origin main
+openpr() { PATH="$WORK/bin:$PATH" GH_LOG="$WORK/gh.log" GH_FIX="$GHFIX" GH_FAIL="${GH_FAIL:-}" "$SOLVE" open-pr; }
+: >"$WORK/gh.log"
+out=$(jq -cn --arg dir "$REPO" '{dir: $dir, branch: "sc-1234", base: "main", title: "  Fix it  ",
+  body: "Shortcut story [sc-1234](https://app.shortcut.com/acme/story/1234)", draft: true}' | openpr)
+is "a PR is opened"                    "$(jq -r .ok <<<"$out")" "true"
+is "with where it is"                  "$(jq -r .url <<<"$out")" "https://github.com/acme/app/pull/77"
+is "and its number"                    "$(jq -r .number <<<"$out")" "77"
+is "the branch reached origin"         "$(git -C "$WORK/origin.git" rev-parse sc-1234)" "$(git -C "$REPO" rev-parse sc-1234)"
+is "and tracks it"                     "$(git -C "$REPO" rev-parse --abbrev-ref sc-1234@{upstream})" "origin/sc-1234"
+has "gh ran in the repository"         "$(cat "$WORK/gh.log")" "$REPO | pr create --head sc-1234 --title Fix it"
+has "against the base"                 "$(cat "$WORK/gh.log")" "--base main"
+has "as a draft when asked"            "$(cat "$WORK/gh.log")" "--draft"
+is "the body went over as written"     "$(cat "$GHFIX/created-body.md")" "Shortcut story [sc-1234](https://app.shortcut.com/acme/story/1234)"
+
+: >"$WORK/gh.log"
+out=$(jq -cn --arg dir "$REPO" '{dir: $dir, branch: "sc-1234", title: "Again"}' | openpr)
+hasnt "no base leaves it to GitHub"    "$(cat "$WORK/gh.log")" "--base"
+hasnt "and not a draft unless asked"   "$(cat "$WORK/gh.log")" "--draft"
+
+out=$(jq -cn --arg dir "$REPO" '{dir: $dir, branch: "sc-1234", title: "x"}' | GH_FAIL=1 openpr)
+is "gh refusing is a github error"     "$(jq -r .code <<<"$out")" "github"
+has "that says the push already happened" "$(jq -r .error <<<"$out")" "The branch is pushed"
+
+: >"$WORK/gh.log"
+out=$(jq -cn --arg dir "$REPO" '{dir: $dir, branch: "sc-9", title: "x"}' | openpr)
+is "a branch that is not there is refused" "$(jq -r .code <<<"$out")" "git"
+out=$(jq -cn --arg dir "$REPO" '{dir: $dir, branch: "main", title: "x"}' | openpr)
+is "only a story branch is pushed"     "$(jq -r .code <<<"$out")" "usage"
+out=$(jq -cn --arg dir "$REPO" '{dir: $dir, branch: "sc-1234", title: "   "}' | openpr)
+is "a blank title is refused"          "$(jq -r .code <<<"$out")" "usage"
+out=$(jq -cn --arg dir "$REPO" '{dir: $dir, branch: "sc-1234", title: "x", base: "main; rm -rf /"}' | openpr)
+is "a base that is not a branch name is refused" "$(jq -r .code <<<"$out")" "usage"
+out=$(jq -cn --arg dir "$WORK/nowhere" '{dir: $dir, branch: "sc-1234", title: "x"}' | openpr)
+is "no repository is refused"          "$(jq -r .code <<<"$out")" "git"
+is "and gh was never asked"            "$(wc -l <"$WORK/gh.log" | tr -d ' ')" "0"
+
+git -C "$REPO" remote remove origin
+out=$(jq -cn --arg dir "$REPO" '{dir: $dir, branch: "sc-1234", title: "x"}' | openpr)
+is "no origin is refused before pushing" "$(jq -r .code <<<"$out")" "git"
+has "and says so"                      "$(jq -r .error <<<"$out")" "no origin"
 
 # ---- QML ------------------------------------------------------------------
 echo "qml"
@@ -814,6 +866,14 @@ const values = (o) => o.map(x => x.value).join(",")
 const detailRaw = {id: 1234, name: "Old", description: "Body", storyType: "bug", groupId: "g1",
   iterationId: 42, ownerIds: ["ada-uuid", "me-uuid"],
   externalLinks: ["https://github.com/a/b/pull/9/files", "https://figma.com/f/x"]};
+
+// A workflow with review after development, for where a story goes once its
+// PR is up.
+const prRefs = {workflows: [{id: 700, states: [
+  {id: 7004, name: "Done", type: "done", position: 4},
+  {id: 7001, name: "Ready", type: "unstarted", position: 1},
+  {id: 7002, name: "In Development", type: "started", position: 2},
+  {id: 7003, name: "Code Review", type: "started", position: 3}]}]};
 
 const cases = [
   // reference lookups
@@ -1269,6 +1329,51 @@ cases.push(
   ["and is good",                 M.prStatusLabel({number: 9, state: "merged"}).tone, "good"],
   ["closed is neither",           M.prStatusLabel({number: 9, state: "closed"}).tone, "neutral"],
   ["no PR, no line",              M.prStatusLabel(null), null],
+  // opening the pull request
+  ["nothing open, nothing to do",   M.prOpenable(null, null, null).ok, false],
+  ["a PR already there says so",    M.prOpenable(null, {id: 1}, {number: 42}).reason, "It already has PR #42"],
+  ["no agent points at Solve",      M.prOpenable(null, {id: 1}, null).reason, "No agent has sc-1 — Alt+A starts one"],
+  ["no branch yet says so",
+    M.prOpenable({agents: [{storyId: 1, branch: {repo: true, exists: false}}]}, {id: 1}, null).reason,
+    "There is no sc-1 branch yet"],
+  ["nor with no commits on it",
+    M.prOpenable({agents: [{storyId: 1, branch: {repo: true, exists: true, ahead: 0}}]}, {id: 1}, null).reason,
+    "sc-1 has no commits yet"],
+  ["commits and no PR can open one",
+    M.prOpenable({agents: [{storyId: 1, branch: {repo: true, exists: true, ahead: 2}}]}, {id: 1}, null).ok, true],
+  ["not before GitHub has said there is no PR",
+    M.prOpenable({agents: [{storyId: 1, branch: {repo: true, exists: true, ahead: 2}}]}, {id: 1}, null, false).reason,
+    "GitHub has not said yet whether sc-1 has a pull request"],
+  ["and then it can",
+    M.prOpenable({agents: [{storyId: 1, branch: {repo: true, exists: true, ahead: 2}}]}, {id: 1}, null, true).ok, true],
+  ["an unknown count does not block it",
+    M.prOpenable({agents: [{storyId: 1, branch: {repo: true, exists: true, ahead: null}}]}, {id: 1}, null).ok, true],
+  ["the draft is titled after the story",
+    M.prDraft({id: 1234, name: "  Fix it  ", appUrl: "https://app.shortcut.com/a/story/1234"},
+      {agents: [{storyId: 1234, cwd: "/r", branch: {base: "origin/main", ahead: 3, dirty: true}}]}).title, "Fix it"],
+  ["and links back to it",
+    M.prDraft({id: 1234, name: "x", appUrl: "https://app.shortcut.com/a/story/1234"}, null).body,
+    "Shortcut story [sc-1234](https://app.shortcut.com/a/story/1234)."],
+  ["the base drops the remote",
+    M.prDraft({id: 1}, {agents: [{storyId: 1, branch: {base: "origin/develop"}}]}).base, "develop"],
+  ["a local base stays as it is",
+    M.prDraft({id: 1}, {agents: [{storyId: 1, branch: {base: "main"}}]}).base, "main"],
+  ["no base known is left to GitHub", M.prDraft({id: 1}, null).base, ""],
+  ["uncommitted work is carried to the screen",
+    M.prDraft({id: 1}, {agents: [{storyId: 1, cwd: "/r", branch: {dirty: true}}]}).dirty, true],
+  ["a new PR link is added after the others",
+    JSON.stringify(M.withPrLink(["https://figma.com/f"], "https://github.com/a/b/pull/7")),
+    '["https://figma.com/f","https://github.com/a/b/pull/7"]'],
+  ["the same PR written another way is not added twice",
+    M.withPrLink(["https://github.com/a/b/pull/7/files"], "https://github.com/a/b/pull/7").length, 1],
+  ["the review state follows in-progress",
+    M.stateAfterPr(prRefs, {workflowStateId: 7002}).name, "Code Review"],
+  ["from before work started, the first in-progress one",
+    M.stateAfterPr(prRefs, {workflowStateId: 7001}).name, "In Development"],
+  ["nothing in progress after it, no guess",
+    M.stateAfterPr(prRefs, {workflowStateId: 7003}), null],
+  ["a state it cannot find, no guess",
+    M.stateAfterPr(prRefs, {workflowStateId: 1}), null],
   ["a story id as a string still matches",
     M.solveAgentFor({agents: [{storyId: 1234}]}, "1234").storyId, 1234],
   ["the branch is the reference", M.solveBranch(18872), "sc-18872"],

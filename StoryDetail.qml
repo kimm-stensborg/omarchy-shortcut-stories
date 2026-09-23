@@ -45,9 +45,22 @@ Item {
   // the one the story is in when you have not walked anywhere.
   function currentStateIndex() {
     if (view.stateCursor >= 0) return view.stateCursor
+    if (view.suggestedIndex >= 0) return view.suggestedIndex
     for (var i = 0; i < view.moveStates.length; i++)
       if (view.moveStates[i].id === view.detail.workflowStateId) return i
     return 0
+  }
+
+  // After a PR is opened the arrows start on the state it probably goes to
+  // next (Model.stateAfterPr). Enter there moves it; the arrows still go
+  // anywhere else.
+  readonly property var suggested: view.store && view.detail && view.store.suggestedState
+    && view.store.suggestedState.storyId === view.detail.id ? view.store.suggestedState : null
+  readonly property int suggestedIndex: {
+    if (!view.suggested) return -1
+    for (var i = 0; i < view.moveStates.length; i++)
+      if (view.moveStates[i].id === view.suggested.stateId) return i
+    return -1
   }
 
   // A story that has moved puts the arrows back on its new state.
@@ -117,6 +130,11 @@ Item {
       if (ctrl && event.key === Qt.Key_E) { view.editStory(); event.accepted = true; return }
       if (alt && event.key === Qt.Key_A) {
         if (view.store) view.store.armSolve()
+        event.accepted = true
+        return
+      }
+      if (alt && event.key === Qt.Key_P) {
+        if (view.store) view.store.armPr()
         event.accepted = true
         return
       }
@@ -202,6 +220,19 @@ Item {
           fontFamily: view.fontFamily
           onClicked: if (view.store) view.store.armSolve()
         }
+
+        // Only when there is something to open one from: the story's branch
+        // exists, has commits, and has no PR yet. Alt+P still answers
+        // otherwise, with the reason.
+        Button {
+          visible: !!view.detail && !!view.store && view.store.prCanOpen
+          bordered: true
+          text: "PR"
+          tooltipText: "Push the story branch and open a pull request (Alt+P)"
+          foreground: view.accent
+          fontFamily: view.fontFamily
+          onClicked: if (view.store) view.store.armPr()
+        }
       }
 
       // ---- The linked PR, if there is one. A click copies the URL rather
@@ -246,6 +277,21 @@ Item {
         elide: Text.ElideRight
         text: view.solveProgress ? "󰚩  " + view.solveProgress.label : ""
         color: view.solveProgress && view.solveProgress.attention ? view.accent : view.muted
+        font.family: view.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+
+      // Why Alt+P had nothing to do, or, once a PR is up, where the story
+      // probably goes next.
+      Text {
+        Layout.fillWidth: true
+        readonly property string openPrError: view.store ? view.store.openPrError : ""
+        readonly property var target: view.suggestedIndex >= 0 ? view.moveStates[view.suggestedIndex] : null
+        visible: (openPrError !== "" && !(view.store && view.store.prReview)) || !!target
+        wrapMode: Text.Wrap
+        text: openPrError !== "" ? openPrError
+          : (target ? "Pull request opened. Enter moves the story to " + target.name + "." : "")
+        color: openPrError !== "" ? view.muted : view.accent
         font.family: view.fontFamily
         font.pixelSize: Style.font.caption
       }

@@ -193,6 +193,14 @@ Item {
       root.store.cancelEdit()
       return
     }
+    // The PR screen is a detour off the story too: a focused field gives up
+    // focus first, then Esc goes back to the story, never past it.
+    if (root.storyOpen && root.store && root.store.prReview) {
+      var prPane = paneLoader.item
+      if (prPane && typeof prPane.escapePressed === "function" && prPane.escapePressed()) return
+      root.store.closePrReview()
+      return
+    }
     if (root.storyOpen && root.mode === "mine") { root.store.closeStory(); return }
     var pane = paneLoader.item
     if (pane && typeof pane.escapePressed === "function" && pane.escapePressed()) {
@@ -364,7 +372,8 @@ Item {
                 : (root.store && root.store.editingId ? composePane
                   : (root.mode === "compose" ? composePane
                     : (root.storyOpen && root.store && root.store.solveReview ? solvePane
-                      : (root.storyOpen ? detailPane : storiesPane)))))
+                      : (root.storyOpen && root.store && root.store.prReview ? prPane
+                        : (root.storyOpen ? detailPane : storiesPane))))))
             onLoaded: Qt.callLater(function() { root.focusPane() })
           }
 
@@ -410,10 +419,15 @@ Item {
       return "Starting the agent in Herdr…"
     if (root.store && root.store.solveError && root.mode === "mine" && root.storyOpen)
       return root.store.solveError
+    if (root.store && root.store.openingPr)
+      return "Pushing the branch and opening the pull request…"
+    if (root.mode === "mine" && root.storyOpen && root.store && root.store.prReview)
+      return "Enter pushes and opens it · Tab edits the title · D a draft · Ctrl+Enter from the text · Esc back"
     if (root.mode === "mine" && root.storyOpen && root.store && root.store.solveReview)
       return "Enter starts · Ctrl+Enter from the prompt · ← → workspace · W a worktree · Esc back"
     if (root.mode === "mine" && root.storyOpen)
-      return "Alt+A solves it · ← → pick a state · Enter moves it · Ctrl+E edits it · Esc back"
+      return "Alt+A solves it · " + (root.store.prCanOpen ? "Alt+P opens a PR · " : "")
+        + "← → pick a state · Enter moves it · Ctrl+E edits it · Esc back"
     if (root.mode === "mine")
       return "Enter opens a story · Alt+I the current sprint · Ctrl+O in your browser · Esc closes"
     return "Ctrl+R refreshes · Alt+1 a new story · Esc closes"
@@ -435,6 +449,11 @@ Item {
   }
 
   Component { id: solvePane; SolveReview {
+    overlay: root
+    store: root.store
+  } }
+
+  Component { id: prPane; PrReview {
     overlay: root
     store: root.store
   } }

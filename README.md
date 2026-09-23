@@ -123,7 +123,8 @@ all of them, and the button says so. A story with no sprint is not in that
 list. The choice is remembered.
 
 In an **open story**: `←` `→` pick a state and `Enter` moves it there,
-`Ctrl + O` opens it in your browser, and `Esc` goes back to the list.
+`Ctrl + O` opens it in your browser, `Alt + A` solves it, `Alt + P` opens
+its pull request, and `Esc` goes back to the list.
 
 ## Writing a story
 
@@ -240,8 +241,9 @@ for you and finished are in the accent colour, because both mean it is your
 turn. It is Herdr's status and what git says about `sc-<id>` in the agent's
 directory, checked every ten seconds while a story is open or any Solve
 agent is running, and with the ordinary refresh otherwise. Nothing leaves
-the machine to find it out. The bar shows a dot when one of them wants you
-(see the bar, above).
+the machine to find it out. The line is only there while Herdr has an agent
+for that story. The bar shows a dot when one of them wants you (see the bar,
+above).
 
 The story's pull request sits under its title with how it is doing:
 `acme/app#42  open · checks passing · waiting for review`. Red when a check
@@ -250,8 +252,23 @@ with everything green. It is the PR linked on the story, or else the one
 GitHub has for `sc-<id>`, looked up from the agent's directory -- so a PR the
 agent's branch got shows up without anyone linking it. It is read with `gh`
 when the story opens, as soon as the branch appears, and every two minutes
-while the story is on screen. The line is only there while Herdr has an agent
-for that story.
+while the story is on screen.
+
+`Alt+P`, or **PR** beside Solve, opens that pull request once the agent has
+committed something and there is none yet. The button, and Alt+P in the
+footer, only show up then. The agent is told not to push, so
+this is where it happens, and not before you have seen it: a screen shows
+`sc-1234 → main · 3 commits`, the directory, the title (the story's name) and
+a description linking back to the story, all editable, and whether it is a
+draft (`D`). Uncommitted changes in that directory are called out, since a
+push leaves them behind. `Enter` pushes `sc-<id>` to origin and runs
+`gh pr create`; `Esc` goes back without doing either. A push GitHub refuses
+stops there with git's reason, and nothing is ever forced.
+
+The PR is then linked on the story, changing only its links. The move strip
+lands on the next in-progress state after the one the story is in -- Code
+Review after In Development, say -- and `Enter` moves it there. Nothing moves
+until you press it. Where Alt+P has nothing to do, the story says why.
 
 Herdr is optional. Without it, Solve says so and the rest of the panel is
 unchanged.
@@ -358,6 +375,7 @@ quotes, newlines and `$` in it survives.
 | `StoriesPane.qml` | The stories assigned to you |
 | `StoryDetail.qml` | One story opened up: description, tasks, comments, and where it can move |
 | `SolveReview.qml` | The prompt, agent, workspace and worktree before Solve starts |
+| `PrReview.qml` | The branch, title and description before a pull request is pushed and opened |
 | `SettingsPane.qml`, `SettingsColumn.qml` | The settings page |
 | `BarWidget.qml` | The glyph, the count, and the badge for stories you have not opened |
 | `install.sh` | Enables the plugin and binds a key |

@@ -111,7 +111,6 @@ Item {
   readonly property bool stale: !!(root.refs && root.refs.stale)
 
   signal storyCreated(var story)
-  signal storyUpdated(var story)
   signal prReady(var pr)
   signal storyMoved(int storyId)
 
@@ -305,21 +304,26 @@ Item {
       JSON.stringify(Model.buildUpdatePatch(form, seed, base)), root.takeUpdate)
   }
 
+  // A story Shortcut has just saved, folded into the open one (if it is
+  // that one) and into the list.
+  function applySaved(story) {
+    if (root.detail && root.detail.id === story.id) {
+      var next = {}
+      for (var k in root.detail) next[k] = root.detail[k]
+      for (var k2 in story) next[k2] = story[k2]
+      root.detail = next
+    }
+    root.stories = Model.applyUpdate(root.stories, story)
+    // Same reasoning as takeCreate: the search index trails the write.
+    catchUpTimer.restart()
+  }
+
   function takeUpdate(text) {
     root.updating = false
     var parsed = parse(text)
     if (parsed && parsed.ok && parsed.story) {
       root.editingId = 0
-      if (root.detail && root.detail.id === parsed.story.id) {
-        var next = {}
-        for (var k in root.detail) next[k] = root.detail[k]
-        for (var k2 in parsed.story) next[k2] = parsed.story[k2]
-        root.detail = next
-      }
-      root.stories = Model.applyUpdate(root.stories, parsed.story)
-      root.storyUpdated(parsed.story)
-      // Same reasoning as takeCreate: the search index trails the write.
-      catchUpTimer.restart()
+      root.applySaved(parsed.story)
     } else {
       root.actionError = parsed && parsed.error ? parsed.error : "bin/shortcut gave no answer"
     }
@@ -353,6 +357,9 @@ Item {
     root.solveError = ""
     root.solveReview = false
     root.solvePending = false
+    root.prReview = false
+    root.openPrError = ""
+    root.suggestedState = null
     root.editingId = 0
     root.loadingDetail = true
     root.refreshWorkspaces()
@@ -364,6 +371,9 @@ Item {
     root.detailFor = 0
     root.detail = null
     root.detailError = ""
+    root.prReview = false
+    root.openPrError = ""
+    root.suggestedState = null
     root.solveReview = false
     root.solvePending = false
     root.solveError = ""
@@ -398,6 +408,7 @@ Item {
     if (parsed && parsed.ok) {
       root.storyMoved(moved)
       root.pendingMove = null
+      root.suggestedState = null
       if (root.detail && root.detail.id === moved && parsed.story) {
         var next = {}
         for (var k in root.detail) next[k] = root.detail[k]
@@ -565,10 +576,14 @@ Item {
   property var prStatus: null
   property string prLookupKey: ""
   property bool loadingPrStatus: false
+  // The lookup GitHub has answered for. prStatus is only the truth about
+  // the story when this is the lookup in use.
+  property string prAnsweredKey: ""
+  readonly property bool prKnown: root.prLookupKey !== "" && root.prAnsweredKey === root.prLookupKey
 
   function refreshPrStatus(force) {
     var lookup = Model.prLookupFor(root.detail, root.solveStatus)
-    if (!lookup) { root.prStatus = null; root.prLookupKey = ""; return }
+    if (!lookup) { root.prStatus = null; root.prLookupKey = ""; root.prAnsweredKey = ""; return }
     var key = JSON.stringify(lookup)
     if (!force && key === root.prLookupKey) return
     if (root.loadingPrStatus) return
@@ -580,15 +595,89 @@ Item {
       // An answer for a story you have already left is not this one's.
       if (root.detailFor !== storyId) return
       var parsed = root.parse(text)
-      if (parsed && parsed.ok === true) root.prStatus = parsed.pr || null
+      if (parsed && parsed.ok === true) {
+        root.prStatus = parsed.pr || null
+        root.prAnsweredKey = key
+      }
     })
   }
 
   onDetailChanged: {
-    if (!root.detail) { root.prStatus = null; root.prLookupKey = ""; return }
+    if (!root.detail) { root.prStatus = null; root.prLookupKey = ""; root.prAnsweredKey = ""; return }
     root.refreshPrStatus(false)
   }
   onSolveStatusChanged: if (root.detail) root.refreshPrStatus(false)
+
+  // ---- Opening the pull request. Alt+P shows what would be sent; only
+  // Enter on that screen pushes the branch and opens the PR. Then the PR is
+  // linked on the story, and the state after it is suggested -- the move
+  // strip lands on it, and Enter there is still yours to press.
+  property bool prReview: false
+  property bool openingPr: false
+  property string openPrError: ""
+  // {storyId, stateId}: where the move strip should start after a PR.
+  property var suggestedState: null
+
+  // Whether the open story has a branch with commits and no PR yet -- the
+  // only time the PR button and the footer's Alt+P are offered at all.
+  // Not until GitHub has been asked, either: before the first answer, "no
+  // PR" only means "not known yet", and a PR opened outside the panel would
+  // otherwise get a button that pushes and then fails.
+  readonly property bool prCanOpen: Model.prOpenable(root.solveStatus, root.detail, root.prStatus, root.prKnown).ok
+
+  function armPr() {
+    var can = Model.prOpenable(root.solveStatus, root.detail, root.prStatus, root.prKnown)
+    root.openPrError = can.ok ? "" : can.reason
+    root.prReview = can.ok
+  }
+
+  function closePrReview() {
+    if (root.openingPr) return
+    root.prReview = false
+    root.openPrError = ""
+  }
+
+  function openPr(draft) {
+    if (root.openingPr || !root.detail) return
+    root.openPrError = ""
+    root.openingPr = true
+    var story = root.detail
+    root.runWithStdin([root.solveCli, "open-pr"], ({}), JSON.stringify(draft), function(text) {
+      root.openingPr = false
+      var parsed = root.parse(text)
+      if (!parsed || parsed.ok !== true) {
+        root.openPrError = parsed && parsed.error ? parsed.error : "bin/solve gave no answer"
+        return
+      }
+      root.prReview = false
+      // The PR exists on GitHub now, so it is linked on its story whether or
+      // not that story is still the one on screen. Only the suggestion of
+      // where to move it next needs you to be looking at it.
+      root.linkPr(story, parsed.url)
+      root.refreshSolveStatus()
+      if (root.detailFor !== story.id) return
+      var next = Model.stateAfterPr(root.refs, story)
+      root.suggestedState = next ? { storyId: story.id, stateId: next.id } : null
+      root.refreshPrStatus(true)
+    })
+  }
+
+  // Only the links go out, checked against what they were: whatever else
+  // someone changed on the story meanwhile is not touched.
+  // Runs on its own, not through updating: an edit being saved at the same
+  // moment must not make the link quietly not happen, and this answer must
+  // not end that edit's Saving... either.
+  function linkPr(story, url) {
+    var links = story.externalLinks || []
+    root.runWithStdin([root.cli, "update", String(story.id)], root.cliEnvironment,
+      JSON.stringify({ externalLinks: Model.withPrLink(links, url), base: { externalLinks: links } }),
+      function(text) {
+        var parsed = root.parse(text)
+        if (parsed && parsed.ok && parsed.story) { root.applySaved(parsed.story); return }
+        root.actionError = "The pull request is open, but it could not be linked on the story: "
+          + (parsed && parsed.error ? parsed.error : "bin/shortcut gave no answer")
+      })
+  }
 
   onPanelOpenChanged: root.ackOpenStory()
   onDetailForChanged: root.ackOpenStory()
