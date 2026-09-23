@@ -682,6 +682,54 @@ function movedBackNotice(refs, move) {
   return "sc-" + str(move.id) + " is back in " + stateNameOf(refs, move.to)
 }
 
+// ---- the keys.
+// Every key the panel answers to, grouped by where it works. The ? card
+// shows this, so the footer only has to carry the two or three that matter
+// on the pane in front of you.
+var KEY_HELP = [
+  { title: "Everywhere", keys: [
+    ["SUPER + ALT + T", "Show or hide the panel"],
+    ["SUPER + ALT + B", "A new bug from a screenshot"],
+    ["Alt + 1", "A new story"],
+    ["Alt + 2", "Your stories"],
+    ["Ctrl + Tab", "Swap between those two"],
+    ["Ctrl + ,", "Settings"],
+    ["Ctrl + R", "Re-read your workspace and stories"],
+    ["? or F1", "These keys"],
+    ["Esc", "Back a step, then close"]] },
+  { title: "A new story", keys: [
+    ["Enter", "File it, from the title"],
+    ["Ctrl + Enter", "File it, from anywhere"],
+    ["Tab / Shift + Tab", "Next field, previous field"],
+    ["Alt + F / B / C", "Feature, bug, chore"],
+    ["Alt + S", "Add a screenshot"],
+    ["Ctrl + V", "Add the image on the clipboard"],
+    ["Esc twice", "Throw the draft away"]] },
+  { title: "Your stories", keys: [
+    ["↑ ↓", "Walk the list"],
+    ["Enter", "Open the story"],
+    ["Ctrl + O", "Open it in Shortcut"],
+    ["Alt + I", "Only the current sprint, or everything"]] },
+  { title: "An open story", keys: [
+    ["← →", "Pick a state"],
+    ["Enter", "Move it there"],
+    ["Ctrl + Z", "Move it back"],
+    ["Ctrl + E", "Edit it"],
+    ["Ctrl + O", "Open it in Shortcut"],
+    ["Ctrl + G", "Open its pull request on GitHub"],
+    ["Alt + A", "Hand it to an agent"],
+    ["Alt + P", "Push its branch and open a pull request"]] },
+  { title: "Solve and pull request screens", keys: [
+    ["Enter", "Start, or push and open"],
+    ["Ctrl + Enter", "The same, from the text"],
+    ["← →", "Pick a workspace (Solve)"],
+    ["W", "In a worktree (Solve)"],
+    ["D", "As a draft (pull request)"],
+    ["Esc", "Back to the story"]] }
+]
+
+function keyHelp() { return KEY_HELP }
+
 // ---- the story list.
 
 function summarizeStory(story, refs) {
@@ -1721,7 +1769,7 @@ if (typeof module !== "undefined") {
     fileList: fileList, addFiles: addFiles, removeFile: removeFile, withScreenshots: withScreenshots,
     composeEscape: composeEscape, cameFrom: cameFrom,
     commonStateName: commonStateName, storyRows: storyRows, linkChips: linkChips,
-    moveNotice: moveNotice, movedBackNotice: movedBackNotice,
+    moveNotice: moveNotice, movedBackNotice: movedBackNotice, keyHelp: keyHelp,
     editBase: editBase, buildUpdatePatch: buildUpdatePatch, resolveIterationSetting: resolveIterationSetting,
     SOLVE_PROMPT_LIMIT: SOLVE_PROMPT_LIMIT,
     solveAgentName: solveAgentName, solveBranch: solveBranch,

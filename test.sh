@@ -1294,6 +1294,11 @@ const cases = [
   ["no move, nothing to say",             M.moveNotice(prRefs, null), ""],
   ["a state not in the cache is still said", M.moveNotice(prRefs, {id: 7, to: 1}), "Moved sc-7 to another state · Ctrl+Z moves it back"],
 
+  // the keys card
+  ["every group has keys",                M.keyHelp().every(g => g.title && g.keys.length > 0), true],
+  ["every key says what it does",         M.keyHelp().every(g => g.keys.every(k => k.length === 2 && k[0] && k[1])), true],
+  ["undo is on the card",                 M.keyHelp().some(g => g.keys.some(k => k[0] === "Ctrl + Z")), true],
+
   // a story's other links
   ["a Figma link is labelled by its host",
     JSON.stringify(M.linkChips(["https://www.figma.com/file/xyz"], "")), '[{"url":"https://www.figma.com/file/xyz","label":"figma.com","github":false}]'],

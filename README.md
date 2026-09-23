@@ -122,6 +122,7 @@ Then delete the `-- Shortcut Stories overlay` block from
 | `Ctrl + R` | Re-read your workspace and your stories. |
 | `Alt + I` | In the list, only the sprint today falls inside. Again shows everything. |
 | `Esc` | Closes a dropdown first. On a new story with something in it, warns, then cancels it and goes back to where you started it. Elsewhere it goes back a step, then closes the panel. |
+| `?` or `F1` | Every key, on a card over the panel. `?` where you are not typing, `F1` anywhere. |
 
 In **My stories**: `↑` `↓` walk the list, `Enter` (or a click) opens the story,
 and `Ctrl + O` opens it in your browser. **All** and the current sprint sit
@@ -256,6 +257,9 @@ board nobody on that team reads.
 The story moves the moment you pick, and moves back if Shortcut refuses.
 For a few seconds afterwards the footer says where it went, and `Ctrl + Z`
 moves it back -- an Enter pressed one state too far costs nothing.
+
+The footer carries only the two or three keys that matter where you are.
+The rest are on the card `?` opens: every key, grouped by where it works.
 
 ## Solving a story
 
@@ -426,6 +430,7 @@ quotes, newlines and `$` in it survives.
 | `StoryDetail.qml` | One story opened up: description, tasks, comments, and where it can move |
 | `SolveReview.qml` | The prompt, agent, workspace and worktree before Solve starts |
 | `PrReview.qml` | The branch, title and description before a pull request is pushed and opened |
+| `KeysCard.qml` | Every key, grouped by where it works, over the panel on `?` |
 | `SettingsPane.qml`, `SettingsColumn.qml` | The settings page |
 | `BarWidget.qml` | The glyph, the count, and the badge for stories you have not opened |
 | `install.sh` | Enables the plugin and binds a key |

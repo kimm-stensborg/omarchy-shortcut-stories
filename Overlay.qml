@@ -25,7 +25,10 @@ Item {
   readonly property var store: root.service
 
   property bool opened: false
-  onOpenedChanged: if (root.store) root.store.panelOpen = root.opened
+  onOpenedChanged: {
+    if (root.store) root.store.panelOpen = root.opened
+    if (!root.opened) root.helpOpen = false
+  }
   property string mode: "compose"          // compose | mine | settings
   property var form: Model.emptyForm()
   // The edit form is a separate draft from the one above: opening an edit
@@ -44,6 +47,15 @@ Item {
   // Alt+1 leaves the list, a story or the settings for the form, cleared
   // when the panel is opened straight onto it.
   property var composeFrom: null
+  // The ? card over the pane: every key, grouped by where it works.
+  property bool helpOpen: false
+  // While the card is up the keyboard is the card's: the pane underneath
+  // must not move a story because an arrow went through to it. Closing it
+  // hands the keys back to the pane.
+  onHelpOpenChanged: {
+    if (root.helpOpen) keyCatcher.forceActiveFocus()
+    else Qt.callLater(function() { root.focusPane() })
+  }
 
   // ---- Theme. Read once, so a theme change moves every colour at once.
   readonly property color background: Color.menu.background
@@ -221,6 +233,7 @@ Item {
   // close. A draft with anything in it costs a second Esc, because a reflex
   // keystroke should not throw away a story you were halfway through writing.
   function escapePressed() {
+    if (root.helpOpen) { root.helpOpen = false; return }
     // Editing is a detour off the detail view, not a mode of its own, so it
     // gets first refusal on Esc -- a dropdown or a focused field still eats it
     // first, same as compose -- and backs out to the story rather than
@@ -355,6 +368,16 @@ Item {
           var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
           var alt = (event.modifiers & Qt.AltModifier) !== 0
 
+          // The card over everything: ? or F1 closes it again, and nothing
+          // else reaches the pane underneath while it is up. "?" only gets
+          // here when no text field took it as a character, so typing one
+          // in a title still types it; F1 works from inside a field too.
+          if (event.key === Qt.Key_F1 || (event.text === "?" && !ctrl && !alt)) {
+            root.helpOpen = !root.helpOpen
+            event.accepted = true; return
+          }
+          if (root.helpOpen) { event.accepted = true; return }
+
           // A text field keeps Ctrl+Z for its own undo; only outside one does
           // it take back the last move.
           if (ctrl && event.key === Qt.Key_Z && root.store && root.store.lastMove) {
@@ -449,6 +472,7 @@ Item {
 
           // ---- Footer.
           RowLayout {
+            id: footerRow
             Layout.fillWidth: true
             spacing: Style.spacing.md
 
@@ -462,6 +486,17 @@ Item {
             }
           }
         }
+
+        // Over the pane, not the footer: the footer says how to close it.
+        KeysCard {
+          anchors.fill: parent
+          anchors.bottomMargin: footerRow.height + Style.spacing.md * 2
+          visible: root.helpOpen
+          foreground: root.foreground
+          muted: root.muted
+          accent: root.accent
+          fontFamily: root.fontFamily
+        }
       }
     }
   }
@@ -474,16 +509,20 @@ Item {
     // footer must not offer them.
     if (root.locked && root.mode !== "settings")
       return "A token unlocks the panel · Ctrl+, for settings · Esc closes"
+    if (root.helpOpen) return "? or Esc closes this"
     if (root.store && root.store.actionError) return root.store.actionError
     if (root.store && root.store.notice) return root.store.notice
     if (root.failure && !root.locked) return root.failure.error
     if (root.store && root.store.stale) return "Showing reference data from earlier — Ctrl+R to retry"
     if (root.store && root.store.loadingPr)
       return "Reading the pull request…"
+    // From here on, the two or three keys that matter on this pane; the
+    // rest are on the ? card, so the line stays readable at a glance. The
+    // form's title has the focus, where ? is a character, so there it is F1.
     if (root.store && root.store.editingId)
-      return root.store.updating ? "Saving…" : "Enter saves it · Tab moves on · Esc cancels the edit"
+      return root.store.updating ? "Saving…" : "Enter saves it · Tab moves on · F1 keys · Esc cancels the edit"
     if (root.mode === "compose")
-      return "Enter files it · a GitHub PR link fills it in · Alt+S or Ctrl+V an image · Tab moves on · Alt+2 your stories · "
+      return "Enter files it · Alt+S a screenshot · F1 keys · "
         + (root.draftDirty() ? "Esc twice cancels" : (root.composeFrom ? "Esc back" : "Esc closes"))
     if (root.store && root.store.solving)
       return "Starting the agent in Herdr…"
@@ -492,17 +531,15 @@ Item {
     if (root.store && root.store.openingPr)
       return "Pushing the branch and opening the pull request…"
     if (root.mode === "mine" && root.storyOpen && root.store && root.store.prReview)
-      return "Enter pushes and opens it · Tab edits the title · D a draft · Ctrl+Enter from the text · Esc back"
+      return "Enter pushes and opens it · D a draft · ? keys · Esc back"
     if (root.mode === "mine" && root.storyOpen && root.store && root.store.solveReview)
-      return "Enter starts · Ctrl+Enter from the prompt · ← → workspace · W a worktree · Esc back"
+      return "Enter starts · ← → workspace · W a worktree · ? keys · Esc back"
     if (root.mode === "mine" && root.storyOpen)
-      return "Alt+A solves it · " + (root.store.prCanOpen ? "Alt+P opens a PR · " : "")
-        + "← → pick a state · Enter moves it · Ctrl+E edits it · Ctrl+O Shortcut"
-        + (root.store.prStatus || Model.firstPrLink(root.store.detail && root.store.detail.externalLinks) ? " · Ctrl+G GitHub" : "")
-        + " · Esc back"
+      return "← → Enter moves it · Alt+A solves it" + (root.store.prCanOpen ? " · Alt+P opens a PR" : "")
+        + " · ? keys · Esc back"
     if (root.mode === "mine")
-      return "Enter opens a story · Alt+I the current sprint · Ctrl+O in your browser · Esc closes"
-    return "Ctrl+R refreshes · Alt+1 a new story · Esc closes"
+      return "Enter opens a story · Alt+I the current sprint · ? keys · Esc closes"
+    return "Alt+1 a new story · ? keys · Esc closes"
   }
 
   Component { id: composePane; ComposePane {
