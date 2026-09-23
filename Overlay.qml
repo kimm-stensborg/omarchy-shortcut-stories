@@ -193,12 +193,14 @@ Item {
       root.store.cancelEdit()
       return
     }
-    // The PR screen is a detour off the story too: a focused field gives up
-    // focus first, then Esc goes back to the story, never past it.
-    if (root.storyOpen && root.store && root.store.prReview) {
-      var prPane = paneLoader.item
-      if (prPane && typeof prPane.escapePressed === "function" && prPane.escapePressed()) return
-      root.store.closePrReview()
+    // The Solve and PR screens are detours off the story: a focused field
+    // gives up focus first -- an edited prompt is kept -- then Esc goes back
+    // to the story, never past it to the list.
+    if (root.storyOpen && root.store && (root.store.solveReview || root.store.prReview)) {
+      var review = paneLoader.item
+      if (review && typeof review.escapePressed === "function" && review.escapePressed()) return
+      if (root.store.solveReview) root.store.closeSolveReview()
+      else root.store.closePrReview()
       return
     }
     if (root.storyOpen && root.mode === "mine") { root.store.closeStory(); return }
