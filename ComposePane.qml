@@ -7,7 +7,7 @@ import "Model.js" as Model
 
 // The new-story form. Six fields, in the order you think of them: what it is
 // called, what kind of thing it is, whose board it belongs on, which sprint,
-// whose it is, and then the detail.
+// who it is for, and then the detail.
 Item {
   id: pane
 
@@ -28,6 +28,7 @@ Item {
   readonly property bool unchanged: pane.editing
     && !Model.editFormDirty(pane.form, pane.overlay ? pane.overlay.editFormSeededWith : null)
   readonly property string prLabel: Model.prSourceLabel(pane.form)
+  readonly property string meId: pane.refs && pane.refs.me ? pane.refs.me.id : ""
 
   readonly property color foreground: pane.overlay ? pane.overlay.foreground : Color.menu.text
   readonly property color muted: pane.overlay ? pane.overlay.muted : Color.muted
@@ -229,12 +230,16 @@ Item {
       }
     }
 
+    // ---- Owners. A story can be for several people, so the picker adds one
+    // at a time and every owner already on it is a chip beside it. Clicking a
+    // chip, or Enter/Delete on it, takes that person off. No chips is
+    // unassigned.
     RowLayout {
       Layout.fillWidth: true
       spacing: Style.spacing.controlGap
 
       Text {
-        text: "Owner"
+        text: "Owners"
         color: pane.muted
         font.family: pane.fontFamily
         font.pixelSize: Style.font.caption
@@ -246,13 +251,66 @@ Item {
         Layout.fillWidth: true
         enabled: pane.hasRefs
         showLabel: false
-        options: Model.memberOptions(pane.refs, pane.refs && pane.refs.me ? pane.refs.me.id : "")
-        value: pane.form.ownerId || ""
+        options: Model.ownerAddOptions(pane.refs, pane.meId, pane.form.ownerIds)
+        // Always empty: this adds, it does not hold a choice. The dropdown
+        // writes the pick into value itself, so it is cleared again below.
+        value: ""
+        triggerLabel: (pane.form.ownerIds || []).length ? "Add someone..." : "Unassigned -- add someone..."
         placeholderText: pane.hasRefs ? "Search people..." : "Loading..."
+        emptyText: "Everyone is on it"
         foreground: pane.foreground
         accent: pane.accent
         fontFamily: pane.fontFamily
-        onChanged: function(v) { pane.change("ownerId", v) }
+        onChanged: function(v) {
+          ownerPicker.value = ""
+          if (v !== "") pane.change("ownerIds", Model.addOwner(pane.form.ownerIds, v))
+        }
+      }
+    }
+
+    RowLayout {
+      Layout.fillWidth: true
+      visible: ownerChipRepeater.count > 0
+      spacing: Style.spacing.controlGap
+
+      Item { Layout.preferredWidth: Style.space(90) }
+
+      Flow {
+        Layout.fillWidth: true
+        spacing: Style.spacing.controlGap
+
+        Repeater {
+          id: ownerChipRepeater
+          model: Model.ownerChips(pane.refs, pane.form.ownerIds, pane.meId)
+
+          Button {
+            id: chip
+            required property var modelData
+            focusable: true
+            bordered: true
+            text: modelData.label + "  󰅖"
+            tooltipText: "Take " + modelData.label + " off this story"
+            foreground: pane.foreground
+            accent: pane.accent
+            fontFamily: pane.fontFamily
+            function drop() {
+              // Every chip is rebuilt when the list changes, so focus handed to
+              // a neighbouring chip would vanish with it. The add picker's
+              // trigger -- the first focusable thing inside it -- stays put.
+              // Everything is looked up first: this chip, and the context its
+              // names resolve in, are gone once the change lands.
+              var trigger = chip.activeFocus ? ownerPicker.nextItemInFocusChain(true) : null
+              pane.change("ownerIds", Model.removeOwner(pane.form.ownerIds, chip.modelData.value))
+              if (trigger) trigger.forceActiveFocus()
+            }
+            onClicked: chip.drop()
+            Keys.onPressed: function(event) {
+              if (event.key === Qt.Key_Delete || event.key === Qt.Key_Backspace) {
+                chip.drop(); event.accepted = true
+              }
+            }
+          }
+        }
       }
     }
 

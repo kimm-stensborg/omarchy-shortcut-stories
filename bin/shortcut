@@ -260,7 +260,8 @@ cmd_create() {
     + (if (.groupId // "") != "" then {group_id: .groupId} else {} end)
     + (if .workflowStateId != null then {workflow_state_id: .workflowStateId} else {} end)
     + (if .iterationId != null then {iteration_id: .iterationId} else {} end)
-    + (if (.ownerId // "") != "" then {owner_ids: [.ownerId]} else {} end)
+    + (([.ownerIds[]? | select(type == "string") | gsub("^\\s+|\\s+$"; "") | select(length > 0)]) as $owners
+       | if ($owners | length) > 0 then {owner_ids: $owners} else {} end)
     + (if (.externalLinks | type) == "array" then
          (([.externalLinks[]? | select(type == "string") | gsub("^\\s+|\\s+$"; "") | select(length > 0)]) as $links
           | if ($links | length) > 0 then {external_links: $links} else {} end)
@@ -276,13 +277,15 @@ cmd_create() {
 }
 
 # Same shape as create, minus workflow_state_id: moving a story between
-# states is the move strip's job, not the edit form's. Iteration and owner go
+# states is the move strip's job, not the edit form's. Iteration and owners go
 # in even when empty, as null and [] -- create leaves an empty field out and
 # lets Shortcut default it, but an edit has to be able to clear a sprint or
-# unassign a story, which leaving the key out cannot do. externalLinks is the
-# whole list Shortcut should end up with, not just the one the form shows --
-# the QML side has already folded the edited PR link back in among whatever
-# else the story had, so this never has to know which entry is which.
+# unassign a story, which leaving the key out cannot do. ownerIds is every
+# owner the story should end up with, so a co-owner nobody touched stays on.
+# externalLinks is the whole list Shortcut should end up with, not just the
+# one the form shows -- the QML side has already folded the edited PR link
+# back in among whatever else the story had, so this never has to know which
+# entry is which.
 cmd_update() {
   local story=${1:-}
   [[ $story =~ ^[0-9]+$ ]] || fail "update needs a story id" usage
@@ -298,7 +301,7 @@ cmd_update() {
       description: ($in[0].description // ""),
       groupId: ($in[0].groupId // ""),
       iterationId: $in[0].iterationId,
-      ownerIds: (if ($in[0].ownerId // null) != null then [$in[0].ownerId] else [] end),
+      ownerIds: [$in[0].ownerIds[]? | select(type == "string")],
       externalLinks: ($in[0].externalLinks // []),
       updatedAt: "2026-09-22T12:00:00Z"}}'
     return
@@ -310,7 +313,7 @@ cmd_update() {
     + (if (.storyType // "") != "" then {story_type: .storyType} else {} end)
     + (if (.groupId // "") != "" then {group_id: .groupId} else {} end)
     + {iteration_id: (.iterationId // null)}
-    + {owner_ids: (if (.ownerId // null) != null then [.ownerId] else [] end)}
+    + {owner_ids: [.ownerIds[]? | select(type == "string") | gsub("^\\s+|\\s+$"; "") | select(length > 0)]}
     + {external_links: ([.externalLinks[]? | select(type == "string")
          | gsub("^\\s+|\\s+$"; "") | select(length > 0)])}
   ' <<<"$input" >"$WORK/body.json" || fail "update could not build a story" usage

@@ -226,7 +226,7 @@ is "with its url"           "$(jq -r .story.appUrl <<<"$out")" "https://app.shor
 is "and sends only a name"  "$(log | sed -n 's/.*body=//p' | tail -1)" '{"name":"Fix the thing"}'
 
 reset_log
-out=$(printf '%s' '{"name":"  Trim me  ","description":"body text\n\n","storyType":"bug","groupId":"g1","workflowStateId":5002,"iterationId":42,"ownerId":"ada-uuid"}' | s create)
+out=$(printf '%s' '{"name":"  Trim me  ","description":"body text\n\n","storyType":"bug","groupId":"g1","workflowStateId":5002,"iterationId":42,"ownerIds":["ada-uuid"," me-uuid "]}' | s create)
 body=$(log | sed -n 's/.*body=//p' | tail -1)
 is "a full form succeeds"        "$(jq -r .ok <<<"$out")" "true"
 is "the name is trimmed"         "$(jq -r .name <<<"$body")" "Trim me"
@@ -235,7 +235,11 @@ is "the type is renamed"         "$(jq -r .story_type <<<"$body")" "bug"
 is "the team is renamed"         "$(jq -r .group_id <<<"$body")" "g1"
 is "the state is a number"       "$(jq -r '.workflow_state_id | type' <<<"$body")" "number"
 is "the iteration is a number"   "$(jq -r '.iteration_id | type' <<<"$body")" "number"
-is "one owner becomes a list"    "$(jq -c .owner_ids <<<"$body")" '["ada-uuid"]'
+is "every owner is sent, trimmed" "$(jq -c .owner_ids <<<"$body")" '["ada-uuid","me-uuid"]'
+
+reset_log
+printf '%s' '{"name":"Nobody","ownerIds":[]}' | s create >/dev/null
+hasnt "no owners are left out"   "$(log | sed -n 's/.*body=//p' | tail -1)" "owner_ids"
 
 reset_log
 route "POST /api/v3/stories" '[201, {"id": 1234, "name": "From a PR", "story_type": "feature", "app_url": "https://app.shortcut.com/acme/story/1234", "workflow_state_id": 5002, "group_id": "g1", "iteration_id": 42, "external_links": ["https://github.com/acme/app/pull/42"], "updated_at": "2026-09-22T10:00:00Z"}]'
@@ -355,7 +359,7 @@ is "and neither calls out"      "$(log | wc -l)" "0"
 # ---- update ----------------------------------------------------------------
 echo "update"
 reset_log
-out=$(printf '%s' '{"name":"Renamed","description":"new body","storyType":"chore","groupId":"g2","iterationId":41,"ownerId":"ada-uuid"}' | s update 1234)
+out=$(printf '%s' '{"name":"Renamed","description":"new body","storyType":"chore","groupId":"g2","iterationId":41,"ownerIds":["ada-uuid","me-uuid"]}' | s update 1234)
 body=$(log | sed -n 's/.*body=//p' | tail -1)
 is "update succeeds"              "$(jq -r .ok <<<"$out")" "true"
 is "the story comes back"         "$(jq -r .story.id <<<"$out")" "1234"
@@ -364,12 +368,12 @@ is "the name is trimmed and sent" "$(jq -r .name <<<"$body")" "Renamed"
 is "the type is renamed"          "$(jq -r .story_type <<<"$body")" "chore"
 is "the team is renamed"          "$(jq -r .group_id <<<"$body")" "g2"
 is "the iteration is a number"    "$(jq -r '.iteration_id | type' <<<"$body")" "number"
-is "one owner becomes a list"     "$(jq -c .owner_ids <<<"$body")" '["ada-uuid"]'
+is "every owner stays on"        "$(jq -c .owner_ids <<<"$body")" '["ada-uuid","me-uuid"]'
 is "no PR link means an empty list" "$(jq -c .external_links <<<"$body")" "[]"
 hasnt "the state is never touched" "$body" "workflow_state_id"
 
 reset_log
-out=$(printf '%s' '{"name":"Clear it","groupId":"","iterationId":null,"ownerId":null}' | s update 1234)
+out=$(printf '%s' '{"name":"Clear it","groupId":"","iterationId":null,"ownerIds":[]}' | s update 1234)
 body=$(log | sed -n 's/.*body=//p' | tail -1)
 is "clearing succeeds"               "$(jq -r .ok <<<"$out")" "true"
 hasnt "an empty team is left out"    "$body" "group_id"
@@ -713,6 +717,19 @@ const cases = [
   ["an unknown me is not invented", labels(M.memberOptions(refs, "ghost")), "Unassigned,Ada Lovelace,Kimm Stensborg"],
   ["nobody is listed twice",   new Set(values(M.memberOptions(refs, "me-uuid")).split(",")).size, 3],
 
+  // owners
+  ["a default owner seeds the list",  M.emptyForm({ownerId: "me-uuid"}).ownerIds.join(","), "me-uuid"],
+  ["no default owner, no owners",     M.emptyForm({}).ownerIds.length, 0],
+  ["adding appends",                  M.addOwner(["me-uuid"], "ada-uuid").join(","), "me-uuid,ada-uuid"],
+  ["adding someone twice does not",   M.addOwner(["me-uuid"], "me-uuid").join(","), "me-uuid"],
+  ["removing takes only that one",    M.removeOwner(["me-uuid", "ada-uuid"], "me-uuid").join(","), "ada-uuid"],
+  ["removing the last is unassigned", M.removeOwner(["me-uuid"], "me-uuid").length, 0],
+  ["blanks never become owners",      M.ownerList(["", "  ", null, "ada-uuid"]).join(","), "ada-uuid"],
+  ["a chip calls me Me",              labels(M.ownerChips(refs, ["me-uuid", "ada-uuid"], "me-uuid")), "Me,Ada Lovelace"],
+  ["someone who left keeps a chip",   labels(M.ownerChips(refs, ["ghost"], "me-uuid")), "Someone who has left"],
+  ["adding offers everyone not on it", labels(M.ownerAddOptions(refs, "me-uuid", ["ada-uuid"])), "Me (@kimm)"],
+  ["and never offers unassigned",     labels(M.ownerAddOptions(refs, "me-uuid", [])), "Me (@kimm),Ada Lovelace"],
+
   // iterations
   ["a done iteration is gone", M.iterationOptions(refs, "", TODAY).some(o => o.label.startsWith("Sprint 11")), false],
   ["the current one is first", M.iterationOptions(refs, "g1", TODAY)[1].label, "Sprint 12 · current"],
@@ -757,10 +774,11 @@ const cases = [
     M.buildCreateRequest({name: "x", iterationId: "42"}, refs).iterationId, 42],
   ["a blank iteration is left out",
     M.buildCreateRequest({name: "x", iterationId: ""}, refs).iterationId, undefined],
-  ["an owner is carried",
-    M.buildCreateRequest({name: "x", ownerId: "me-uuid"}, refs).ownerId, "me-uuid"],
-  ["a blank owner is left out",
-    M.buildCreateRequest({name: "x", ownerId: ""}, refs).ownerId, undefined],
+  ["every owner is carried",
+    JSON.stringify(M.buildCreateRequest({name: "x", ownerIds: ["me-uuid", "ada-uuid"]}, refs).ownerIds),
+    '["me-uuid","ada-uuid"]'],
+  ["no owners are left out",
+    M.buildCreateRequest({name: "x", ownerIds: []}, refs).ownerIds, undefined],
   ["a PR link is carried",
     JSON.stringify(M.buildCreateRequest({name: "x", externalLinks: ["https://github.com/a/b/pull/1"]}, refs).externalLinks),
     '["https://github.com/a/b/pull/1"]'],
@@ -783,10 +801,15 @@ const cases = [
     M.buildUpdateRequest({name: "x", iterationId: "42"}).iterationId, 42],
   ["a cleared iteration is null, not left out",
     M.buildUpdateRequest({name: "x", iterationId: ""}).iterationId, null],
-  ["an owner is carried",
-    M.buildUpdateRequest({name: "x", ownerId: "me-uuid"}).ownerId, "me-uuid"],
-  ["a cleared owner is null, not left out",
-    M.buildUpdateRequest({name: "x", ownerId: ""}).ownerId, null],
+  ["every owner is carried",
+    JSON.stringify(M.buildUpdateRequest({name: "x", ownerIds: ["me-uuid", "ada-uuid"]}).ownerIds),
+    '["me-uuid","ada-uuid"]'],
+  ["no owners is an empty list, not left out",
+    JSON.stringify(M.buildUpdateRequest({name: "x", ownerIds: []}).ownerIds), "[]"],
+  ["an edit that only renames keeps a co-owner",
+    JSON.stringify(M.buildUpdateRequest(Object.assign(
+      M.formFromDetail({name: "Old", ownerIds: ["ada-uuid", "me-uuid"]}), {name: "New"})).ownerIds),
+    '["ada-uuid","me-uuid"]'],
   ["the linked PR rides along with whatever else the story had",
     JSON.stringify(M.buildUpdateRequest({name: "x",
       externalLinks: ["https://github.com/a/b/pull/9"], otherLinks: ["https://figma.com/f/x"]}).externalLinks),
@@ -825,10 +848,10 @@ const cases = [
     M.formFromDetail({name: "Fix the thing"}).name, "Fix the thing"],
   ["an unset type defaults, same as a fresh form",
     M.formFromDetail({}).storyType, "feature"],
-  ["the first owner becomes the form's one owner",
-    M.formFromDetail({ownerIds: ["ada-uuid", "me-uuid"]}).ownerId, "ada-uuid"],
+  ["every owner comes back, in order",
+    M.formFromDetail({ownerIds: ["ada-uuid", "me-uuid"]}).ownerIds.join(","), "ada-uuid,me-uuid"],
   ["no owners means unassigned",
-    M.formFromDetail({ownerIds: []}).ownerId, ""],
+    M.formFromDetail({ownerIds: []}).ownerIds.length, 0],
   ["an iteration id turns back into a string",
     M.formFromDetail({iterationId: 42}).iterationId, "42"],
   ["no iteration is an empty string, not \"null\"",
@@ -882,12 +905,15 @@ const cases = [
 
   // the draft
   ["a fresh form is clean",    M.draftIsDirty(M.emptyForm()), false],
-  ["spaces are not a draft",   M.draftIsDirty({name: "  ", description: "", storyType: "feature", groupId: "", iterationId: "", ownerId: ""}), false],
-  ["a title is a draft",       M.draftIsDirty({name: "x", description: "", storyType: "feature", groupId: "", iterationId: "", ownerId: ""}), true],
-  ["so is a changed type",     M.draftIsDirty({name: "", description: "", storyType: "bug", groupId: "", iterationId: "", ownerId: ""}), true],
-  ["a linked PR is a draft",   M.draftIsDirty({name: "", description: "", storyType: "feature", groupId: "", iterationId: "", ownerId: "", externalLinks: ["https://github.com/a/b/pull/1"]}), true],
+  ["spaces are not a draft",   M.draftIsDirty({name: "  ", description: "", storyType: "feature", groupId: "", iterationId: "", ownerIds: []}), false],
+  ["a title is a draft",       M.draftIsDirty({name: "x", description: "", storyType: "feature", groupId: "", iterationId: "", ownerIds: []}), true],
+  ["so is a changed type",     M.draftIsDirty({name: "", description: "", storyType: "bug", groupId: "", iterationId: "", ownerIds: []}), true],
+  ["a linked PR is a draft",   M.draftIsDirty({name: "", description: "", storyType: "feature", groupId: "", iterationId: "", ownerIds: [], externalLinks: ["https://github.com/a/b/pull/1"]}), true],
   ["a default is not a draft", M.draftIsDirty(M.emptyForm({storyType: "bug", groupId: "g1"}), {storyType: "bug", groupId: "g1"}), false],
-  ["sticky keeps the team",    M.clearForm({name: "x", groupId: "g1", iterationId: "42", ownerId: "me-uuid"}, {}, true).groupId, "g1"],
+  ["sticky keeps the team",    M.clearForm({name: "x", groupId: "g1", iterationId: "42", ownerIds: ["me-uuid"]}, {}, true).groupId, "g1"],
+  ["and every owner",          M.clearForm({name: "x", ownerIds: ["me-uuid", "ada-uuid"]}, {}, true).ownerIds.join(","), "me-uuid,ada-uuid"],
+  ["a second owner is a draft", M.draftIsDirty({name: "", storyType: "feature", ownerIds: ["me-uuid", "ada-uuid"]}, {ownerId: "me-uuid"}), true],
+  ["the default owner is not",  M.draftIsDirty(M.emptyForm({ownerId: "me-uuid"}), {ownerId: "me-uuid"}), false],
   ["and drops the title",      M.clearForm({name: "x", groupId: "g1"}, {}, true).name, ""],
   ["and drops the PR link",    M.clearForm({name: "x", externalLinks: ["https://github.com/a/b/pull/1"]}, {}, true).externalLinks.length, 0],
   ["unsticky drops the team",  M.clearForm({name: "x", groupId: "g1"}, {}, false).groupId, ""],

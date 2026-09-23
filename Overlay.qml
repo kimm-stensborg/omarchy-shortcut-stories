@@ -93,7 +93,7 @@ Item {
   }
 
   // A form that has never been filled in is not a draft, however far it sits
-  // from its defaults. Without this the very first open reads "ownerId is
+  // from its defaults. Without this the very first open reads "ownerIds is
   // empty but should be you" as a story someone started writing, and the
   // defaults never get applied at all.
   property bool formSeeded: false

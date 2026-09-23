@@ -138,6 +138,49 @@ function memberOptions(refs, meId) {
   return out
 }
 
+// The people a story is for, in the order they were added, each once. A story
+// can have several owners; every place the form holds them goes through here,
+// so an edit never quietly narrows the list down to its first entry.
+function ownerList(ids) {
+  var list = ids || []
+  var out = []
+  for (var i = 0; i < list.length; i++) {
+    var id = trim(list[i])
+    if (id !== "" && out.indexOf(id) === -1) out.push(id)
+  }
+  return out
+}
+
+function addOwner(ids, id) {
+  return ownerList((ids || []).concat([id]))
+}
+
+function removeOwner(ids, id) {
+  var gone = trim(id)
+  return ownerList(ids).filter(function(o) { return o !== gone })
+}
+
+// One chip per owner already on the form. Someone who has left the workspace
+// still gets a chip, so they can be seen and taken off rather than riding
+// along invisibly.
+function ownerChips(refs, ids, meId) {
+  var mine = str(meId)
+  return ownerList(ids).map(function(id) {
+    if (id === mine) return { value: id, label: "Me" }
+    var m = findMember(refs, id)
+    return { value: id, label: m ? str(m.name) : "Someone who has left" }
+  })
+}
+
+// What the add picker offers: everyone not on the story yet, you first.
+// "Unassigned" is not a person to add -- no chips is what unassigned means.
+function ownerAddOptions(refs, meId, ids) {
+  var taken = ownerList(ids)
+  return memberOptions(refs, meId).filter(function(o) {
+    return o.value !== "" && taken.indexOf(o.value) === -1
+  })
+}
+
 // An iteration is current when today falls inside it. Shortcut does not check
 // that an iteration belongs to the team you picked, so filtering by team is a
 // convenience here rather than a rule the API would enforce.
@@ -270,7 +313,7 @@ function emptyForm(defaults) {
     storyType: str(d.storyType) || "feature",
     groupId: str(d.groupId),
     iterationId: str(d.iterationId),
-    ownerId: str(d.ownerId),
+    ownerIds: ownerList([d.ownerId]),
     // A GitHub pull request the story was filled from. Filed as Shortcut's
     // external_links so the PR stays on the story after the title is rewritten.
     externalLinks: [],
@@ -333,7 +376,7 @@ function applyPrToForm(form, pr, defaults) {
     next.storyType = str(form.storyType) || next.storyType
     next.groupId = str(form.groupId)
     next.iterationId = str(form.iterationId)
-    next.ownerId = str(form.ownerId)
+    next.ownerIds = ownerList(form.ownerIds)
   }
   var title = trim(pr && pr.title)
   if (title === "") title = "Pull request #" + str(pr && pr.number)
@@ -380,8 +423,8 @@ function buildCreateRequest(form, refs) {
   var iteration = parseInt(str(form && form.iterationId), 10)
   if (isFinite(iteration)) body.iterationId = iteration
 
-  var owner = str(form && form.ownerId)
-  if (owner !== "") body.ownerId = owner
+  var owners = ownerList(form && form.ownerIds)
+  if (owners.length) body.ownerIds = owners
 
   var links = (form && form.externalLinks) || []
   var cleaned = []
@@ -414,7 +457,7 @@ function formFromDetail(raw) {
     groupId: str(raw && raw.groupId),
     iterationId: raw && raw.iterationId !== null && raw.iterationId !== undefined
       ? str(raw.iterationId) : "",
-    ownerId: (raw && raw.ownerIds && raw.ownerIds.length) ? str(raw.ownerIds[0]) : "",
+    ownerIds: ownerList(raw && raw.ownerIds),
     externalLinks: pr ? [pr] : [],
     otherLinks: others
   }
@@ -429,7 +472,6 @@ function formFromDetail(raw) {
 // can never silently drop a doc or a Figma link it already had.
 function buildUpdateRequest(form) {
   var iteration = parseInt(str(form && form.iterationId), 10)
-  var owner = str(form && form.ownerId)
   var pr = trim(form && form.externalLinks && form.externalLinks[0])
   if (pr !== "") {
     var parsed = parseGithubPrUrl(pr)
@@ -442,7 +484,7 @@ function buildUpdateRequest(form) {
     storyType: str(form && form.storyType) || "feature",
     groupId: str(form && form.groupId),
     iterationId: isFinite(iteration) ? iteration : null,
-    ownerId: owner !== "" ? owner : null,
+    ownerIds: ownerList(form && form.ownerIds),
     externalLinks: pr !== "" ? others.concat([pr]) : others
   }
 }
@@ -467,7 +509,7 @@ function draftIsDirty(form, defaults) {
   if (str(form.storyType) !== base.storyType) return true
   if (str(form.groupId) !== base.groupId) return true
   if (str(form.iterationId) !== base.iterationId) return true
-  if (str(form.ownerId) !== base.ownerId) return true
+  if (ownerList(form.ownerIds).join(",") !== base.ownerIds.join(",")) return true
   if ((form.externalLinks || []).length) return true
   return false
 }
@@ -480,7 +522,7 @@ function clearForm(form, defaults, sticky) {
   if (sticky && form) {
     next.groupId = str(form.groupId)
     next.iterationId = str(form.iterationId)
-    next.ownerId = str(form.ownerId)
+    next.ownerIds = ownerList(form.ownerIds)
   }
   return next
 }
@@ -1283,7 +1325,9 @@ if (typeof module !== "undefined") {
     storyKey: storyKey, unseenStories: unseenStories, unseenCount: unseenCount,
     noteSeen: noteSeen, seenIdsOf: seenIdsOf, sameIds: sameIds,
     settingOptions: settingOptions, resolveTeamSetting: resolveTeamSetting,
-    resolveOwnerSetting: resolveOwnerSetting, resolveIterationSetting: resolveIterationSetting,
+    resolveOwnerSetting: resolveOwnerSetting,
+    ownerList: ownerList, addOwner: addOwner, removeOwner: removeOwner,
+    ownerChips: ownerChips, ownerAddOptions: ownerAddOptions, resolveIterationSetting: resolveIterationSetting,
     SOLVE_PROMPT_LIMIT: SOLVE_PROMPT_LIMIT,
     solveAgentName: solveAgentName, solveBranch: solveBranch,
     workspaceByLabel: workspaceByLabel, solveTarget: solveTarget,

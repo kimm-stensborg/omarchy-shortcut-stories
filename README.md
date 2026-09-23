@@ -137,8 +137,16 @@ workspace's default board, in a column that team never looks at. Picking a
 team therefore resolves its workflow's default state and sends that too. With
 no team picked, nothing is sent and Shortcut applies its own default.
 
+A story can have several owners. **Owners** adds one person at a time, and
+everyone already on the story sits under it as a chip. Click a chip, or
+`Delete` on it, to take that person off. No chips is unassigned. It starts
+with whoever **Owner** in the settings names.
+
+Editing a story keeps every owner it already has, including ones the form
+did not touch, so renaming a story shared between two people leaves both on it.
+
 Filing a story clears the title, the description and the type, and leaves the
-team, iteration and owner where they were -- five stories in a row usually
+team, iteration and owners where they were -- five stories in a row usually
 belong to the same sprint. Turn that off with **Keep team and iteration after
 filing**.
 
@@ -237,7 +245,7 @@ rather than going stale when this one ends.
 |--------|---------|------|
 | Team | none | The team a new story starts on |
 | Iteration | none | A sprint by name, or whichever one today falls inside |
-| Owner | Me | Who a new story is assigned to |
+| Owner | Me | Who a new story starts assigned to; more can be added on the form |
 | Type | Feature | What a new story starts as |
 | Keep team and iteration after filing | on | Leaves them set for the next story |
 | Next to the glyph | Open stories | The same number as My stories, or how many of those are in progress |
