@@ -465,7 +465,18 @@ Item {
                     : (root.storyOpen && root.store && root.store.solveReview ? solvePane
                       : (root.storyOpen && root.store && root.store.prReview ? prPane
                         : (root.storyOpen ? detailPane : storiesPane))))))
-            onLoaded: Qt.callLater(function() { root.focusPane() })
+            onLoaded: {
+              Qt.callLater(function() { root.focusPane() })
+              paneIn.restart()
+            }
+
+            // Each pane settles in rather than snapping: a short fade with
+            // a few pixels of drift, quick enough that it never waits on you.
+            ParallelAnimation {
+              id: paneIn
+              NumberAnimation { target: paneLoader.item; property: "opacity"; from: 0; to: 1; duration: 140; easing.type: Easing.OutCubic }
+              NumberAnimation { target: paneLoader.item; property: "y"; from: Style.space(6); to: 0; duration: 180; easing.type: Easing.OutCubic }
+            }
           }
 
           PanelSeparator { Layout.fillWidth: true }

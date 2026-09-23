@@ -16,6 +16,8 @@ Rectangle {
   property string fontFamily: Style.font.menuFamily
 
   color: Color.menu.background
+  opacity: visible ? 1 : 0
+  Behavior on opacity { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
 
   // Eats clicks meant for the pane underneath.
   MouseArea { anchors.fill: parent }
