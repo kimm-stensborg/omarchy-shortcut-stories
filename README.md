@@ -19,6 +19,7 @@ background, border and font, with Hyprland's corner rounding.
 | `curl` | Talking to the Shortcut API |
 | `jq` | Reading and building the JSON that goes over it |
 | `libsecret` (`secret-tool`) | Keeping your API token in the keyring |
+| `gh` (optional) | Filling a new story from a GitHub pull request URL |
 
 `secret-tool` is optional. Without it the token goes in a `0600` file under
 `~/.config/omarchy-shortcut-stories/` instead.
@@ -123,6 +124,12 @@ Only a name is required; everything else is optional and Shortcut fills in
 what you leave out. The line under the form says where the story is about to
 land -- `Platform → Ready for Dev` -- so you can see what picking a team did
 before you file it.
+
+Paste a GitHub pull request URL into the title and the form fills itself from
+the PR: the title, the description, and the PR kept as an external link on the
+story. `Enter` on the URL does the same and files it once the lookup lands.
+Reading the PR uses `gh`, so you need the GitHub CLI signed in for private
+repos.
 
 A story's board is decided by its workflow state and not by its team, so
 naming a team without a state would file it under the right team on the
@@ -279,6 +286,7 @@ and is reconciled ten seconds later.
 bin/shortcut refs | jq '[.groups[].name]'   # your teams
 bin/shortcut mine | jq '.stories[].name'    # what is assigned to you
 echo '{"name":"From the terminal"}' | bin/shortcut create
+bin/shortcut pr https://github.com/owner/repo/pull/42
 bin/shortcut show 1234 | jq -r .story.description
 bin/shortcut move 1234 5002
 bin/solve workspaces | jq '.workspaces[].label'

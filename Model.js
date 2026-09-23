@@ -270,12 +270,70 @@ function emptyForm(defaults) {
     storyType: str(d.storyType) || "feature",
     groupId: str(d.groupId),
     iterationId: str(d.iterationId),
-    ownerId: str(d.ownerId)
+    ownerId: str(d.ownerId),
+    // A GitHub pull request the story was filled from. Filed as Shortcut's
+    // external_links so the PR stays on the story after the title is rewritten.
+    externalLinks: []
   }
+}
+
+// A paste of https://github.com/owner/repo/pull/123 — with optional trailing
+// path, query or hash — becomes the story. Anything else is just a title.
+function parseGithubPrUrl(text) {
+  var raw = trim(text)
+  var match = raw.match(/^https?:\/\/(?:www\.)?github\.com\/([^\/\s?#]+)\/([^\/\s?#]+)\/pull\/(\d+)(?:\/[^?\s#]*)?(?:\?[^\s#]*)?(?:#[^\s]*)?$/i)
+  if (!match) return null
+  var owner = match[1]
+  var repo = match[2].replace(/\.git$/i, "")
+  var number = parseInt(match[3], 10)
+  if (!isFinite(number) || number < 1) return null
+  return {
+    owner: owner,
+    repo: repo,
+    number: number,
+    url: "https://github.com/" + owner + "/" + repo + "/pull/" + number
+  }
+}
+
+// owner/repo#42 for the line under the form. A bare URL that is not a GitHub
+// PR still shows, rather than vanishing into an empty string.
+function prSourceLabel(form) {
+  var links = (form && form.externalLinks) || []
+  if (!links.length) return ""
+  var parsed = parseGithubPrUrl(links[0])
+  if (parsed) return parsed.owner + "/" + parsed.repo + "#" + parsed.number
+  return trim(links[0])
+}
+
+// Turn a looked-up pull request into the form: the PR's title and body become
+// the story, and the URL is kept so Create can file it as an external link.
+// Team, sprint, owner and type stay where they were — you already picked them.
+function applyPrToForm(form, pr, defaults) {
+  var next = emptyForm(defaults)
+  if (form) {
+    next.storyType = str(form.storyType) || next.storyType
+    next.groupId = str(form.groupId)
+    next.iterationId = str(form.iterationId)
+    next.ownerId = str(form.ownerId)
+  }
+  var title = trim(pr && pr.title)
+  if (title === "") title = "Pull request #" + str(pr && pr.number)
+  if (title.length > 512) title = title.slice(0, 512)
+  next.name = title
+  next.description = str(pr && pr.body).replace(/\s+$/, "")
+  var url = str(pr && pr.url)
+  if (url === "" && pr) {
+    var parsed = parseGithubPrUrl("https://github.com/" + str(pr.owner) + "/" + str(pr.repo) + "/pull/" + str(pr.number))
+    url = parsed ? parsed.url : ""
+  }
+  next.externalLinks = url !== "" ? [url] : []
+  return next
 }
 
 function validateForm(form) {
   var name = trim(form && form.name)
+  // A bare PR URL is not a story name yet — lookup still has to rewrite it —
+  // but it is enough to start filing from, so validation lets it through.
   if (name === "") return { ok: false, errors: { name: "A story needs a name" } }
   if (name.length > 512) return { ok: false, errors: { name: "That name is too long for Shortcut" } }
   return { ok: true, errors: {} }
@@ -306,6 +364,14 @@ function buildCreateRequest(form, refs) {
   var owner = str(form && form.ownerId)
   if (owner !== "") body.ownerId = owner
 
+  var links = (form && form.externalLinks) || []
+  var cleaned = []
+  for (var i = 0; i < links.length; i++) {
+    var url = trim(links[i])
+    if (url !== "") cleaned.push(url)
+  }
+  if (cleaned.length) body.externalLinks = cleaned
+
   return body
 }
 
@@ -319,11 +385,13 @@ function draftIsDirty(form, defaults) {
   if (str(form.groupId) !== base.groupId) return true
   if (str(form.iterationId) !== base.iterationId) return true
   if (str(form.ownerId) !== base.ownerId) return true
+  if ((form.externalLinks || []).length) return true
   return false
 }
 
 // After filing one. Team, iteration and owner stay put when sticky: five
-// stories in a row usually belong to the same sprint.
+// stories in a row usually belong to the same sprint. The PR link does not —
+// the next story is not about that pull request.
 function clearForm(form, defaults, sticky) {
   var next = emptyForm(defaults)
   if (sticky && form) {
@@ -1094,6 +1162,8 @@ if (typeof module !== "undefined") {
     storyTypes: storyTypes, storyGlyph: storyGlyph,
     formatDescription: formatDescription,
     emptyForm: emptyForm, validateForm: validateForm,
+    parseGithubPrUrl: parseGithubPrUrl, prSourceLabel: prSourceLabel,
+    applyPrToForm: applyPrToForm,
     buildCreateRequest: buildCreateRequest, draftIsDirty: draftIsDirty,
     clearForm: clearForm, destinationLabel: destinationLabel,
     summarizeStory: summarizeStory, storyComments: storyComments,

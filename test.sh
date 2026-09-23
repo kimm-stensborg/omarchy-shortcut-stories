@@ -235,6 +235,13 @@ is "the iteration is a number"   "$(jq -r '.iteration_id | type' <<<"$body")" "n
 is "one owner becomes a list"    "$(jq -c .owner_ids <<<"$body")" '["ada-uuid"]'
 
 reset_log
+out=$(printf '%s' '{"name":"From a PR","externalLinks":["https://github.com/acme/app/pull/42","  "]}' | s create)
+body=$(log | sed -n 's/.*body=//p' | tail -1)
+is "a PR link is filed"          "$(jq -r .ok <<<"$out")" "true"
+is "as Shortcut's external_links" "$(jq -c .external_links <<<"$body")" '["https://github.com/acme/app/pull/42"]'
+hasnt "blank links are dropped"  "$(jq -c .external_links <<<"$body")" '""'
+
+reset_log
 printf '%s' '{"name":"Whitelisted","bogusKey":"dropped","archived":true}' | s create >/dev/null
 body=$(log | sed -n 's/.*body=//p' | tail -1)
 hasnt "an unknown key never ships" "$body" "bogusKey"
@@ -263,6 +270,44 @@ out=$(printf '%s' '{"name":"Bad type","storyType":"epic"}' | s create)
 is "a rejected story fails"     "$(jq -r .ok <<<"$out")" "false"
 has "with the field named"      "$(jq -r .error <<<"$out")" "story_type"
 route "POST /api/v3/stories" '[201, {"id": 1234, "name": "Fix the thing", "story_type": "bug", "app_url": "https://app.shortcut.com/acme/story/1234", "workflow_state_id": 5002, "group_id": "g1", "iteration_id": 42, "updated_at": "2026-09-22T10:00:00Z"}]'
+
+# ---- pr -------------------------------------------------------------------
+echo "pr"
+out=$(s pr)
+is "pr without a URL is refused" "$(jq -r .code <<<"$out")" "usage"
+out=$(s pr "https://example.com/not-a-pr")
+is "a non-GitHub URL is refused" "$(jq -r .code <<<"$out")" "usage"
+out=$(s pr "https://github.com/acme/app/issues/7")
+is "an issue URL is refused"     "$(jq -r .code <<<"$out")" "usage"
+
+out=$(SHORTCUT_DEMO=1 "$CLI" pr "https://github.com/acme/app/pull/42/files?w=1")
+is "demo pr works"               "$(jq -r .ok <<<"$out")" "true"
+is "demo pr keeps the number"    "$(jq -r .pr.number <<<"$out")" "42"
+is "demo pr canonicalises the url" "$(jq -r .pr.url <<<"$out")" "https://github.com/acme/app/pull/42"
+is "demo pr names the repo"      "$(jq -r '[.pr.owner,.pr.repo]|join("/")' <<<"$out")" "acme/app"
+
+# A fake gh on PATH: the real one must not be what the test leans on, and a
+# failing gh has to surface as code=github rather than a bare shell error.
+FAKE_BIN=$WORK/fakebin
+mkdir -p "$FAKE_BIN"
+cat >"$FAKE_BIN/gh" <<'GH'
+#!/bin/bash
+if [[ ${GH_FAIL:-} ]]; then
+  echo "GraphQL: Could not resolve to a PullRequest" >&2
+  exit 1
+fi
+printf '%s\n' '{"title":"Fix the widget","body":"It was broken.\n","url":"https://github.com/acme/app/pull/42","number":42,"state":"OPEN","isDraft":false}'
+GH
+chmod +x "$FAKE_BIN/gh"
+out=$(PATH="$FAKE_BIN:$PATH" s pr "https://github.com/acme/app/pull/42")
+is "pr reads through gh"         "$(jq -r .ok <<<"$out")" "true"
+is "pr carries the title"        "$(jq -r .pr.title <<<"$out")" "Fix the widget"
+has "pr carries the body"        "$(jq -r .pr.body <<<"$out")" "It was broken."
+is "pr carries owner and repo"   "$(jq -r '[.pr.owner,.pr.repo]|join("/")' <<<"$out")" "acme/app"
+out=$(PATH="$FAKE_BIN:$PATH" GH_FAIL=1 s pr "https://github.com/acme/app/pull/99")
+is "a missing PR fails"          "$(jq -r .ok <<<"$out")" "false"
+is "as a github error"           "$(jq -r .code <<<"$out")" "github"
+has "with gh's reason"           "$(jq -r .error <<<"$out")" "Could not resolve"
 
 # ---- mine ----------------------------------------------------------------
 echo "mine"
@@ -650,15 +695,53 @@ const cases = [
     M.buildCreateRequest({name: "x", ownerId: "me-uuid"}, refs).ownerId, "me-uuid"],
   ["a blank owner is left out",
     M.buildCreateRequest({name: "x", ownerId: ""}, refs).ownerId, undefined],
+  ["a PR link is carried",
+    JSON.stringify(M.buildCreateRequest({name: "x", externalLinks: ["https://github.com/a/b/pull/1"]}, refs).externalLinks),
+    '["https://github.com/a/b/pull/1"]'],
+  ["blank PR links are dropped",
+    M.buildCreateRequest({name: "x", externalLinks: ["", "  "]}, refs).externalLinks, undefined],
+
+  // GitHub pull requests
+  ["a PR URL is recognised",
+    !!M.parseGithubPrUrl("https://github.com/acme/app/pull/42"), true],
+  ["and canonicalised",
+    M.parseGithubPrUrl("https://github.com/acme/app/pull/42/files?w=1").url,
+    "https://github.com/acme/app/pull/42"],
+  ["www is fine",
+    M.parseGithubPrUrl("https://www.github.com/acme/app/pull/7").number, 7],
+  ["an issue is not a PR",
+    M.parseGithubPrUrl("https://github.com/acme/app/issues/42"), null],
+  ["a title is not a PR",
+    M.parseGithubPrUrl("Fix the widget"), null],
+  ["applyPr fills the title",
+    M.applyPrToForm({}, {title: "  Fix it  ", body: "why\n\n", url: "https://github.com/a/b/pull/1", number: 1}).name,
+    "Fix it"],
+  ["applyPr fills the body",
+    M.applyPrToForm({}, {title: "Fix", body: "why\n\n", url: "https://github.com/a/b/pull/1", number: 1}).description,
+    "why"],
+  ["applyPr keeps the team",
+    M.applyPrToForm({groupId: "g1", storyType: "bug"}, {title: "Fix", body: "", url: "https://github.com/a/b/pull/1", number: 1}).groupId,
+    "g1"],
+  ["applyPr attaches the link",
+    M.applyPrToForm({}, {title: "Fix", body: "", url: "https://github.com/a/b/pull/1", number: 1}).externalLinks[0],
+    "https://github.com/a/b/pull/1"],
+  ["a missing title uses the number",
+    M.applyPrToForm({}, {title: "", body: "", url: "https://github.com/a/b/pull/9", number: 9}).name,
+    "Pull request #9"],
+  ["the source label is short",
+    M.prSourceLabel({externalLinks: ["https://github.com/acme/app/pull/42"]}),
+    "acme/app#42"],
 
   // the draft
   ["a fresh form is clean",    M.draftIsDirty(M.emptyForm()), false],
   ["spaces are not a draft",   M.draftIsDirty({name: "  ", description: "", storyType: "feature", groupId: "", iterationId: "", ownerId: ""}), false],
   ["a title is a draft",       M.draftIsDirty({name: "x", description: "", storyType: "feature", groupId: "", iterationId: "", ownerId: ""}), true],
   ["so is a changed type",     M.draftIsDirty({name: "", description: "", storyType: "bug", groupId: "", iterationId: "", ownerId: ""}), true],
+  ["a linked PR is a draft",   M.draftIsDirty({name: "", description: "", storyType: "feature", groupId: "", iterationId: "", ownerId: "", externalLinks: ["https://github.com/a/b/pull/1"]}), true],
   ["a default is not a draft", M.draftIsDirty(M.emptyForm({storyType: "bug", groupId: "g1"}), {storyType: "bug", groupId: "g1"}), false],
   ["sticky keeps the team",    M.clearForm({name: "x", groupId: "g1", iterationId: "42", ownerId: "me-uuid"}, {}, true).groupId, "g1"],
   ["and drops the title",      M.clearForm({name: "x", groupId: "g1"}, {}, true).name, ""],
+  ["and drops the PR link",    M.clearForm({name: "x", externalLinks: ["https://github.com/a/b/pull/1"]}, {}, true).externalLinks.length, 0],
   ["unsticky drops the team",  M.clearForm({name: "x", groupId: "g1"}, {}, false).groupId, ""],
 
   // where it lands

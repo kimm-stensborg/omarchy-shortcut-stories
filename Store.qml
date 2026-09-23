@@ -99,12 +99,19 @@ Item {
   property bool creating: false
   property string actionError: ""
   property int movingStory: 0
+  property bool loadingPr: false
+  property string prError: ""
+  // Enter on a bare PR URL files after the lookup lands, rather than filing
+  // the URL string itself as the story name.
+  property bool createAfterPr: false
+  property string prLookupUrl: ""
 
   readonly property bool ready: root.refs !== null
   readonly property var me: root.refs ? root.refs.me : null
   readonly property bool stale: !!(root.refs && root.refs.stale)
 
   signal storyCreated(var story)
+  signal prReady(var pr)
   signal storyMoved(int storyId)
 
   // ---- Reference data.
@@ -171,10 +178,53 @@ Item {
     if (root.creating) return
     var check = Model.validateForm(form)
     if (!check.ok) { root.actionError = check.errors.name; return }
+    // A title that is still a PR URL has to be resolved first. Filing the URL
+    // as the name would work, but it is not what the person meant.
+    var pr = Model.parseGithubPrUrl(form && form.name)
+    if (pr && !(form.externalLinks && form.externalLinks.length)) {
+      root.createAfterPr = true
+      if (!root.loadingPr) root.lookupPr(pr.url)
+      return
+    }
+    // Paste already kicked off a lookup; Enter just asks to file when it lands.
+    if (root.loadingPr) {
+      root.createAfterPr = true
+      return
+    }
     root.actionError = ""
     root.creating = true
     createProc.body = JSON.stringify(Model.buildCreateRequest(form, root.refs))
     createProc.running = true
+  }
+
+  function lookupPr(url) {
+    var parsed = Model.parseGithubPrUrl(url)
+    if (!parsed) {
+      root.prError = "That is not a GitHub pull request link"
+      return
+    }
+    if (prProc.running && root.prLookupUrl === parsed.url) return
+    root.prError = ""
+    root.prLookupUrl = parsed.url
+    root.loadingPr = true
+    prProc.command = [root.cli, "pr", parsed.url]
+    prProc.running = true
+  }
+
+  function takePr(text) {
+    root.loadingPr = false
+    var parsed = parse(text)
+    if (parsed && parsed.ok && parsed.pr) {
+      root.prError = ""
+      root.prReady(parsed.pr)
+      // createAfterPr is consumed by the overlay once it has rewritten the form,
+      // so the create call sees the PR title rather than the URL.
+    } else {
+      root.createAfterPr = false
+      root.prError = parsed && parsed.error ? parsed.error : "Could not read that pull request"
+      root.actionError = root.prError
+    }
+    root.prLookupUrl = ""
   }
 
   function takeCreate(text) {
@@ -527,6 +577,15 @@ Item {
       stdinEnabled = false
     }
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.takeCreate(text) }
+  }
+
+  // gh speaks to GitHub; this process never sees the Shortcut token. The URL
+  // is argv rather than stdin because it is a single short string with no
+  // quotes to protect, and the panel never puts a secret there.
+  Process {
+    id: prProc
+    environment: root.cliEnvironment
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.takePr(text) }
   }
 
   Process {

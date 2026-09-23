@@ -193,6 +193,15 @@ Item {
         "--exec", "omarchy-launch-browser", String(story.appUrl)
       ])
     }
+    function onPrReady(pr) {
+      root.form = Model.applyPrToForm(root.form, pr, root.formSeededWith || root.formDefaults())
+      // Enter (or Create) while the title was still a URL asked us to file once
+      // the lookup landed. Do that now that the form holds the PR's title.
+      if (root.store && root.store.createAfterPr) {
+        root.store.createAfterPr = false
+        root.store.createStory(root.form)
+      }
+    }
   }
 
   PanelWindow {
@@ -354,8 +363,10 @@ Item {
     if (root.store && root.store.actionError) return root.store.actionError
     if (root.failure && !root.locked) return root.failure.error
     if (root.store && root.store.stale) return "Showing reference data from earlier — Ctrl+R to retry"
+    if (root.store && root.store.loadingPr)
+      return "Reading the pull request…"
     if (root.mode === "compose")
-      return "Enter files it · Ctrl+Enter from anywhere · Tab moves on · Alt+2 your stories · Esc closes"
+      return "Enter files it · a GitHub PR link fills it in · Tab moves on · Alt+2 your stories · Esc closes"
     if (root.store && root.store.solving)
       return "Starting the agent in Herdr…"
     if (root.store && root.store.solveError && root.mode === "mine" && root.storyOpen)

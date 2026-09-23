@@ -17,7 +17,8 @@ Item {
   readonly property var form: pane.overlay ? pane.overlay.form : ({})
   readonly property var refs: pane.overlay ? pane.overlay.refs : null
   readonly property bool hasRefs: pane.overlay ? pane.overlay.hasRefs : false
-  readonly property bool busy: pane.store ? pane.store.creating : false
+  readonly property bool busy: pane.store ? (pane.store.creating || pane.store.loadingPr) : false
+  readonly property string prLabel: Model.prSourceLabel(pane.form)
 
   readonly property color foreground: pane.overlay ? pane.overlay.foreground : Color.menu.text
   readonly property color muted: pane.overlay ? pane.overlay.muted : Color.muted
@@ -59,6 +60,22 @@ Item {
     pane.store.createStory(pane.form)
   }
 
+  // A pasted GitHub PR URL is looked up after a short pause so a mid-edit
+  // does not fire twice, and so typing something that only looks like a URL
+  // for a moment does not thrash gh.
+  Timer {
+    id: prLookup
+    interval: 350
+    onTriggered: {
+      if (!pane.store) return
+      var parsed = Model.parseGithubPrUrl(pane.form.name)
+      if (!parsed) return
+      // Already filled from this same PR — leave the title alone.
+      if (pane.form.externalLinks && pane.form.externalLinks[0] === parsed.url) return
+      pane.store.lookupPr(parsed.url)
+    }
+  }
+
   // Tab walks Qt's own focus chain rather than a list kept here. A hand-rolled
   // ring cannot see into a SearchableDropdown -- the focusable thing is its
   // trigger, not the wrapper -- so focusing the wrapper silently did nothing
@@ -79,15 +96,19 @@ Item {
       id: titleField
       Layout.fillWidth: true
       text: pane.form.name || ""
-      placeholderText: "What needs doing?"
+      placeholderText: "What needs doing? Or a GitHub PR link"
       foreground: pane.foreground
       accent: pane.accent
       font.family: pane.fontFamily
       font.pixelSize: Style.font.subtitle
-      onTextChanged: pane.change("name", text)
+      onTextChanged: {
+        pane.change("name", text)
+        prLookup.restart()
+      }
       Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
           // A title is one line, and this is the fast path: summon, type, Enter.
+          // A PR URL on Enter is resolved first, then filed.
           pane.submit(); event.accepted = true
         } else if (event.key === Qt.Key_Tab) {
           pane.step(titleField, 1); event.accepted = true
@@ -252,23 +273,41 @@ Item {
       Layout.fillWidth: true
       spacing: Style.spacing.md
 
-      Text {
+      ColumnLayout {
         Layout.fillWidth: true
-        elide: Text.ElideRight
-        color: pane.muted
-        font.family: pane.fontFamily
-        font.pixelSize: Style.font.caption
-        // "Loading" has to stop being the answer once the load has failed,
-        // or the line sits there claiming progress that is not happening.
-        text: pane.hasRefs ? Model.destinationLabel(pane.form, pane.refs)
-          : (pane.store && pane.store.failure ? "Your workspace could not be read — Ctrl+R retries"
-                                              : "Loading your workspace...")
+        spacing: Style.spacing.xs
+
+        Text {
+          Layout.fillWidth: true
+          elide: Text.ElideRight
+          color: pane.muted
+          font.family: pane.fontFamily
+          font.pixelSize: Style.font.caption
+          // "Loading" has to stop being the answer once the load has failed,
+          // or the line sits there claiming progress that is not happening.
+          text: pane.hasRefs ? Model.destinationLabel(pane.form, pane.refs)
+            : (pane.store && pane.store.failure ? "Your workspace could not be read — Ctrl+R retries"
+                                                : "Loading your workspace...")
+        }
+
+        Text {
+          Layout.fillWidth: true
+          visible: pane.prLabel !== "" || !!(pane.store && pane.store.loadingPr)
+          elide: Text.ElideRight
+          color: pane.muted
+          font.family: pane.fontFamily
+          font.pixelSize: Style.font.caption
+          text: pane.store && pane.store.loadingPr
+            ? "Reading the pull request…"
+            : (pane.prLabel !== "" ? "From " + pane.prLabel : "")
+        }
       }
 
       Button {
         bordered: true
         enabled: !pane.busy
-        text: pane.busy ? "Filing..." : "Create story"
+        text: pane.store && pane.store.loadingPr ? "Reading…"
+          : (pane.store && pane.store.creating ? "Filing..." : "Create story")
         foreground: pane.busy ? pane.muted : pane.accent
         fontFamily: pane.fontFamily
         onClicked: pane.submit()

@@ -7,11 +7,12 @@
 #   shortcut logout            forget the stored token and the cached reference data
 #   shortcut refs [--force]    teams, workflows, members, iterations and you
 #   shortcut create            read one JSON object on stdin and file it as a story
+#   shortcut pr <url>          read a GitHub pull request (title, body, url) for the form
 #   shortcut mine [--limit N]  the stories assigned to you that are not done
 #   shortcut move <id> <state> move a story to another workflow state
 #   shortcut show <id>         one story in full: description, tasks and comments
 #
-# refs, create, mine, move and show always print a single JSON object, {"ok": false,
+# refs, create, pr, mine, move and show always print a single JSON object, {"ok": false,
 # "code": ..., "error": ...} on failure, so the panel has exactly one thing to
 # parse. login and logout print human lines instead: they run in a terminal,
 # where a JSON blob is no use to the person reading it.
@@ -258,6 +259,10 @@ cmd_create() {
     + (if .workflowStateId != null then {workflow_state_id: .workflowStateId} else {} end)
     + (if .iterationId != null then {iteration_id: .iterationId} else {} end)
     + (if (.ownerId // "") != "" then {owner_ids: [.ownerId]} else {} end)
+    + (if (.externalLinks | type) == "array" then
+         (([.externalLinks[]? | select(type == "string") | gsub("^\\s+|\\s+$"; "") | select(length > 0)]) as $links
+          | if ($links | length) > 0 then {external_links: $links} else {} end)
+       else {} end)
   ' <<<"$input" >"$WORK/body.json" || fail "create could not build a story" usage
 
   load_token
@@ -270,6 +275,53 @@ cmd_create() {
     groupId: .group_id, iterationId: .iteration_id,
     updatedAt: .updated_at}}' "$WORK/created" ||
     fail "Shortcut sent an unreadable story" http
+}
+
+# A GitHub pull request URL becomes the story's title and description. gh is
+# what talks to GitHub — this script never holds a GitHub token of its own —
+# and the Shortcut token is not involved at all.
+cmd_pr() {
+  local url=${1:-}
+  [[ -n $url ]] || fail "pr needs a GitHub pull request URL" usage
+  if ! [[ $url =~ ^https?://(www\.)?github\.com/[^/]+/[^/]+/pull/[0-9]+([/?#]|$) ]]; then
+    fail "pr needs a GitHub pull request URL" usage
+  fi
+
+  # Canonical form: drop /files and friends so Shortcut stores one link shape.
+  local owner repo number
+  owner=$(sed -nE 's|^https?://(www\.)?github\.com/([^/]+)/([^/]+)/pull/([0-9]+).*|\2|p' <<<"$url")
+  repo=$(sed -nE 's|^https?://(www\.)?github\.com/([^/]+)/([^/]+)/pull/([0-9]+).*|\3|p' <<<"$url")
+  number=$(sed -nE 's|^https?://(www\.)?github\.com/([^/]+)/([^/]+)/pull/([0-9]+).*|\4|p' <<<"$url")
+  [[ -n $owner && -n $repo && -n $number ]] || fail "pr needs a GitHub pull request URL" usage
+  local canonical="https://github.com/$owner/$repo/pull/$number"
+
+  if [[ -n ${SHORTCUT_DEMO:-} ]]; then
+    jq -cn --arg url "$canonical" --arg owner "$owner" --arg repo "$repo" --argjson number "$number" \
+      '{ok: true, pr: {title: "Demo pull request", body: "Filled from a GitHub PR in demo mode.",
+        url: $url, number: $number, owner: $owner, repo: $repo, state: "OPEN", isDraft: false}}'
+    return
+  fi
+
+  if ! command -v gh >/dev/null 2>&1; then
+    fail "Reading a pull request needs the GitHub CLI (gh)" missing
+  fi
+
+  if ! gh pr view "$canonical" --json title,body,url,number,state,isDraft \
+      >"$WORK/pr.json" 2>"$WORK/pr.err"; then
+    local why; why=$(head -1 "$WORK/pr.err" | tr -d '\r')
+    fail "Could not read that pull request${why:+: $why}" github
+  fi
+
+  jq -c --arg owner "$owner" --arg repo "$repo" --arg url "$canonical" '{ok: true, pr: {
+    title: (.title // ""),
+    body: (.body // ""),
+    url: (if (.url // "") != "" then .url else $url end),
+    number: .number,
+    owner: $owner,
+    repo: $repo,
+    state: (.state // ""),
+    isDraft: (.isDraft == true)
+  }}' "$WORK/pr.json" || fail "GitHub sent an unreadable pull request" github
 }
 
 story_summary='{
@@ -433,6 +485,7 @@ cmd_logout() {
 case ${1:-} in
   refs) shift; cmd_refs "$@" ;;
   create) cmd_create ;;
+  pr) shift; cmd_pr "$@" ;;
   mine) shift; cmd_mine "$@" ;;
   move) shift; cmd_move "$@" ;;
   show) shift; cmd_show "$@" ;;
