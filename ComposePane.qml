@@ -460,30 +460,80 @@ Item {
                                 : "Not recognized as a GitHub pull request link"
     }
 
-    // ---- Description.
-    QQC.ScrollView {
+    // ---- Description. The same box as every other field, with the label
+    // in the same column, so it reads as somewhere to type rather than as a
+    // stray line of grey in an empty half of the panel. It takes whatever
+    // height is left.
+    RowLayout {
       Layout.fillWidth: true
       Layout.fillHeight: true
-      clip: true
+      spacing: Style.spacing.controlGap
 
-      QQC.TextArea {
-        id: descriptionArea
-        text: pane.form.description || ""
-        placeholderText: "Anything more? (optional, markdown)"
-        wrapMode: TextEdit.Wrap
-        color: pane.foreground
-        placeholderTextColor: pane.muted
-        selectionColor: Style.selectionFillFor(pane.foreground, pane.accent)
+      Text {
+        text: "Description"
+        color: pane.muted
         font.family: pane.fontFamily
-        font.pixelSize: Style.font.body
-        background: null
-        onTextChanged: pane.change("description", text)
-        Keys.onPressed: function(event) {
-          pane.pasteImage(event)
-          // Enter is a newline here and nowhere else in the form; Ctrl+Enter
-          // is what files the story from inside it.
-          if (event.key === Qt.Key_Tab) { pane.step(descriptionArea, 1); event.accepted = true }
-          else if (event.key === Qt.Key_Backtab) { pane.step(descriptionArea, -1); event.accepted = true }
+        font.pixelSize: Style.font.caption
+        Layout.preferredWidth: Style.space(90)
+        Layout.alignment: Qt.AlignTop
+        Layout.topMargin: Style.spacing.inputPaddingY
+      }
+
+      BorderSurface {
+        id: descriptionBox
+        Layout.fillWidth: true
+        Layout.fillHeight: true
+        readonly property bool focused: descriptionArea.activeFocus
+        readonly property bool hot: descriptionHover.hovered
+        readonly property var spec: Border.controlSpec(focused ? "focus" : (hot ? "hover-cursor" : "normal"),
+                                                       pane.foreground, pane.accent)
+        color: Style.controlFill(focused, hot, pane.foreground, pane.accent)
+        borderSpec: spec
+        radius: Style.cornerRadius
+
+        HoverHandler { id: descriptionHover }
+
+        QQC.ScrollView {
+          anchors.fill: parent
+          anchors.leftMargin: Border.left(descriptionBox.spec)
+          anchors.rightMargin: Border.right(descriptionBox.spec)
+          anchors.topMargin: Border.top(descriptionBox.spec)
+          anchors.bottomMargin: Border.bottom(descriptionBox.spec)
+          clip: true
+
+          QQC.TextArea {
+            id: descriptionArea
+            text: pane.form.description || ""
+            placeholderText: "Anything more? (optional, markdown)"
+            wrapMode: TextEdit.Wrap
+            color: pane.foreground
+            placeholderTextColor: pane.muted
+            selectionColor: Style.selectionFillFor(pane.foreground, pane.accent)
+            font.family: pane.fontFamily
+            font.pixelSize: Style.font.body
+            leftPadding: Style.spacing.controlPaddingX
+            rightPadding: Style.spacing.controlPaddingX
+            topPadding: Style.spacing.inputPaddingY
+            bottomPadding: Style.spacing.inputPaddingY
+            background: null
+            onTextChanged: pane.change("description", text)
+            Keys.onPressed: function(event) {
+              pane.pasteImage(event)
+              // Enter is a newline here and nowhere else in the form; Ctrl+Enter
+              // is what files the story from inside it.
+              if (event.key === Qt.Key_Tab) { pane.step(descriptionArea, 1); event.accepted = true }
+              else if (event.key === Qt.Key_Backtab) { pane.step(descriptionArea, -1); event.accepted = true }
+            }
+          }
+        }
+
+        // A click anywhere in the box, not only on the lines already written,
+        // puts the cursor in it. On top, and passing the press on, so the
+        // text underneath still gets its click for placing the cursor.
+        MouseArea {
+          anchors.fill: parent
+          cursorShape: Qt.IBeamCursor
+          onPressed: function(mouse) { descriptionArea.forceActiveFocus(); mouse.accepted = false }
         }
       }
     }

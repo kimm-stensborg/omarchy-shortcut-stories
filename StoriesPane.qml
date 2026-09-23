@@ -34,16 +34,12 @@ Item {
   readonly property var scopedStories: Model.storiesInScope(
     pane.store ? pane.store.stories : [], pane.refs, pane.scope, pane.today)
 
-  readonly property var rows: {
-    var sections = Model.sectionStories(pane.scopedStories, pane.refs, pane.showDone)
-    var out = []
-    for (var i = 0; i < sections.length; i++) {
-      out.push({ kind: "header", title: sections[i].title, story: null })
-      for (var j = 0; j < sections[i].stories.length; j++)
-        out.push({ kind: "story", title: "", story: sections[i].stories[j] })
-    }
-    return out
-  }
+  readonly property var rows: Model.storyRows(
+    Model.sectionStories(pane.scopedStories, pane.refs, pane.showDone))
+
+  // "3 hours ago" has to move on while the panel sits open.
+  property real now: Date.now() / 1000
+  Timer { interval: 60000; repeat: true; running: pane.visible; onTriggered: pane.now = Date.now() / 1000 }
 
   property int cursor: 0
 
@@ -209,6 +205,8 @@ Item {
     Item {
       id: row
       readonly property var story: parent.rowData.story
+      readonly property bool showState: parent.rowData.showState
+      readonly property var agent: pane.store ? Model.solveProgress(pane.store.solveStatus, story.id) : null
       readonly property bool current: parent.rowIndex === pane.cursor
       readonly property bool busy: pane.moving === story.id
 
@@ -237,7 +235,11 @@ Item {
           Layout.fillWidth: true
           spacing: Style.spacing.sm
 
+          // A fixed width, so a wrench and a bulb take the same room and the
+          // references line up down the list.
           Text {
+            Layout.preferredWidth: Style.space(16)
+            horizontalAlignment: Text.AlignHCenter
             text: row.story.glyph
             color: pane.muted
             font.family: pane.fontFamily
@@ -276,9 +278,30 @@ Item {
             onClicked: Quickshell.execDetached(["omarchy-launch-browser", row.story.prUrl])
           }
 
+          // An agent Solve started on it: accent when it wants you back.
           Text {
+            visible: !!row.agent
+            text: "󰚩"
+            color: row.agent && row.agent.attention ? pane.accent : pane.muted
+            font.family: pane.fontFamily
+            font.pixelSize: Style.font.body
+          }
+
+          // Only when it is not the state the heading already names.
+          Text {
+            visible: row.busy || row.showState
             text: row.busy ? "moving..." : row.story.stateName
             color: row.busy ? pane.accent : pane.muted
+            font.family: pane.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          // A fixed column, right-aligned, so the times line up down the list.
+          Text {
+            Layout.preferredWidth: Style.space(80)
+            horizontalAlignment: Text.AlignRight
+            text: Model.relativeTime(row.story.updatedAt, pane.now)
+            color: pane.muted
             font.family: pane.fontFamily
             font.pixelSize: Style.font.caption
           }

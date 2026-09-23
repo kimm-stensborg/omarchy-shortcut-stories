@@ -782,13 +782,51 @@ function sectionStories(stories, refs, showDone) {
       if (a.statePosition !== b.statePosition) return a.statePosition - b.statePosition
       return a.updatedAt < b.updatedAt ? 1 : (a.updatedAt > b.updatedAt ? -1 : 0)
     })
-    sections.push({ type: type, title: sectionTitle(type), stories: rows })
+    var common = commonStateName(rows)
+    sections.push({ type: type, title: sectionTitle(type), stories: rows,
+                    commonState: common,
+                    heading: common ? sectionTitle(type) + " · " + common : sectionTitle(type) })
   }
   // A story whose state is not in the cache would otherwise vanish from a list
   // that is meant to show everything assigned to you.
   var orphans = summaries.filter(function(s) { return STATE_TYPE_ORDER.indexOf(s.stateType) === -1 })
-  if (orphans.length) sections.push({ type: "unknown", title: "Elsewhere", stories: orphans })
+  if (orphans.length)
+    sections.push({ type: "unknown", title: "Elsewhere", stories: orphans, commonState: "", heading: "Elsewhere" })
   return sections
+}
+
+// The state most of a section's stories are in, when at least two share it
+// -- it goes in the heading once, and a row only names its state when it is
+// a different one. Ten rows all saying "Prioritized & Ready for
+// Development" is noise; the one that says "Ready for Code Review" among
+// them is the news. "" when no state is shared, so every row keeps its own.
+function commonStateName(rows) {
+  var counts = {}
+  var best = ""
+  var most = 1
+  for (var i = 0; i < rows.length; i++) {
+    var name = str(rows[i].stateName)
+    if (name === "" || name === "Unknown") continue
+    counts[name] = (counts[name] || 0) + 1
+    if (counts[name] > most) { most = counts[name]; best = name }
+  }
+  return best
+}
+
+// The list as the pane walks it: a heading, then its stories, each knowing
+// whether to name its state.
+function storyRows(sections) {
+  var out = []
+  for (var i = 0; i < (sections || []).length; i++) {
+    var section = sections[i]
+    out.push({ kind: "header", title: section.heading, story: null, showState: false })
+    for (var j = 0; j < section.stories.length; j++) {
+      var story = section.stories[j]
+      out.push({ kind: "story", title: "", story: story,
+                 showState: story.stateName !== section.commonState })
+    }
+  }
+  return out
 }
 
 function sectionTitle(type) {
@@ -1634,6 +1672,7 @@ if (typeof module !== "undefined") {
     ownerChips: ownerChips, ownerAddOptions: ownerAddOptions,
     fileList: fileList, addFiles: addFiles, removeFile: removeFile, withScreenshots: withScreenshots,
     composeEscape: composeEscape, cameFrom: cameFrom,
+    commonStateName: commonStateName, storyRows: storyRows,
     editBase: editBase, buildUpdatePatch: buildUpdatePatch, resolveIterationSetting: resolveIterationSetting,
     SOLVE_PROMPT_LIMIT: SOLVE_PROMPT_LIMIT,
     solveAgentName: solveAgentName, solveBranch: solveBranch,

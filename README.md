@@ -201,7 +201,13 @@ Images can only go on a new story for now, not onto one you are editing.
 
 ## Reading a story
 
-A row in the list is a glance -- reference, name, state. `Enter` or a click
+A row in the list is a glance -- reference, name, and how long since it
+last changed. The stories are grouped by how far along they are, and the
+state most of a group shares is named once, in its heading: a row only says
+its state when it is a different one, so the story sitting in Code Review
+among ten that are Ready for Development is the one that stands out. A story
+an agent is working on has a small robot beside it, in the accent colour when
+the agent wants you back. `Enter` or a click
 opens the story itself: who it is for, which sprint, the estimate, the
 deadline and its labels, and under all of that the description, the tasks
 and the comments. The description and the comments are rendered rather than
