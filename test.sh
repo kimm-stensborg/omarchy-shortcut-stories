@@ -115,7 +115,8 @@ cat >"$WORK/routes.json" <<'JSON'
     "created_at": "2026-09-18T09:00:00Z", "updated_at": "2026-09-21T09:00:00Z"}],
   "PUT /api/v3/stories/1234": [200, {"id": 1234, "name": "Fix the thing", "story_type": "bug",
     "app_url": "https://app.shortcut.com/acme/story/1234", "workflow_state_id": 5004,
-    "group_id": "g1", "iteration_id": 42, "owner_ids": ["me-uuid"], "updated_at": "2026-09-22T11:00:00Z"}]
+    "group_id": "g1", "iteration_id": 42, "owner_ids": ["me-uuid"], "description": "Updated body",
+    "updated_at": "2026-09-22T11:00:00Z"}]
 }
 JSON
 
@@ -343,6 +344,45 @@ out=$(s move 1234 abc)
 is "a junk state id is refused" "$(jq -r .code <<<"$out")" "usage"
 is "and neither calls out"      "$(log | wc -l)" "0"
 
+# ---- update ----------------------------------------------------------------
+echo "update"
+reset_log
+out=$(printf '%s' '{"name":"Renamed","description":"new body","storyType":"chore","groupId":"g2","iterationId":41,"ownerId":"ada-uuid"}' | s update 1234)
+body=$(log | sed -n 's/.*body=//p' | tail -1)
+is "update succeeds"              "$(jq -r .ok <<<"$out")" "true"
+is "the story comes back"         "$(jq -r .story.id <<<"$out")" "1234"
+is "the description rides along"  "$(jq -r .story.description <<<"$out")" "Updated body"
+is "the name is trimmed and sent" "$(jq -r .name <<<"$body")" "Renamed"
+is "the type is renamed"          "$(jq -r .story_type <<<"$body")" "chore"
+is "the team is renamed"          "$(jq -r .group_id <<<"$body")" "g2"
+is "the iteration is a number"    "$(jq -r '.iteration_id | type' <<<"$body")" "number"
+is "one owner becomes a list"     "$(jq -c .owner_ids <<<"$body")" '["ada-uuid"]'
+hasnt "the state is never touched" "$body" "workflow_state_id"
+
+reset_log
+out=$(printf '%s' '{"name":"Clear it","groupId":"","iterationId":null,"ownerId":null}' | s update 1234)
+body=$(log | sed -n 's/.*body=//p' | tail -1)
+is "clearing succeeds"               "$(jq -r .ok <<<"$out")" "true"
+hasnt "an empty team is left out"    "$body" "group_id"
+is "a cleared iteration is null"     "$(jq -r .iteration_id <<<"$body")" "null"
+is "a cleared owner is an empty list" "$(jq -c .owner_ids <<<"$body")" "[]"
+
+reset_log
+out=$(printf '%s' '{"name":"x"}' | s update abc)
+is "a junk story id is refused" "$(jq -r .code <<<"$out")" "usage"
+out=$(printf '%s' '{"name":"   "}' | s update 1234)
+is "a blank name is refused"    "$(jq -r .code <<<"$out")" "usage"
+out=$(printf '%s' 'not json' | s update 1234)
+is "junk on stdin is refused"   "$(jq -r .code <<<"$out")" "usage"
+is "and neither calls out"      "$(log | wc -l)" "0"
+
+reset_log
+route "PUT /api/v3/stories/1234" '[422, {"errors": {"name": "is too long"}}]'
+out=$(printf '%s' '{"name":"Too long"}' | s update 1234)
+is "a rejected update fails" "$(jq -r .ok <<<"$out")" "false"
+has "with the field named"  "$(jq -r .error <<<"$out")" "name"
+route "PUT /api/v3/stories/1234" '[200, {"id": 1234, "name": "Fix the thing", "story_type": "bug", "app_url": "https://app.shortcut.com/acme/story/1234", "workflow_state_id": 5004, "group_id": "g1", "iteration_id": 42, "owner_ids": ["me-uuid"], "description": "Updated body", "updated_at": "2026-09-22T11:00:00Z"}]'
+
 # ---- show ----------------------------------------------------------------
 echo "show"
 reset_log
@@ -373,6 +413,9 @@ is "demo refs works with no token" "$(jq -r .ok <<<"$out")" "true"
 out=$(printf '%s' '{"name":"  demo  "}' | SHORTCUT_DEMO=1 "$CLI" create)
 is "demo create works"             "$(jq -r .ok <<<"$out")" "true"
 is "and trims like the real one"   "$(jq -r .story.name <<<"$out")" "demo"
+out=$(printf '%s' '{"name":"  demo edit  "}' | SHORTCUT_DEMO=1 "$CLI" update 1234)
+is "demo update works"             "$(jq -r .ok <<<"$out")" "true"
+is "and trims like the real one"   "$(jq -r .story.name <<<"$out")" "demo edit"
 SHORTCUT_DEMO=1 "$CLI" mine >/dev/null
 SHORTCUT_DEMO=1 "$CLI" move 1 2 >/dev/null
 out=$(SHORTCUT_DEMO=1 "$CLI" show 1234)
@@ -701,6 +744,43 @@ const cases = [
   ["blank PR links are dropped",
     M.buildCreateRequest({name: "x", externalLinks: ["", "  "]}, refs).externalLinks, undefined],
 
+  // the update body -- everything rides along, even empty, so an edit can
+  // clear a field rather than only ever add to one
+  ["the name is trimmed",
+    M.buildUpdateRequest({name: "  Hi  "}).name, "Hi"],
+  ["a blank description is sent, not dropped",
+    M.buildUpdateRequest({name: "x", description: ""}).description, ""],
+  ["trailing blank lines still go",
+    M.buildUpdateRequest({name: "x", description: "body\n\n"}).description, "body"],
+  ["a team rides along as-is, no state guess",
+    M.buildUpdateRequest({name: "x", groupId: "g1"}).groupId, "g1"],
+  ["no update body ever names a state",
+    "workflowStateId" in M.buildUpdateRequest({name: "x", groupId: "g1"}), false],
+  ["an iteration becomes a number",
+    M.buildUpdateRequest({name: "x", iterationId: "42"}).iterationId, 42],
+  ["a cleared iteration is null, not left out",
+    M.buildUpdateRequest({name: "x", iterationId: ""}).iterationId, null],
+  ["an owner is carried",
+    M.buildUpdateRequest({name: "x", ownerId: "me-uuid"}).ownerId, "me-uuid"],
+  ["a cleared owner is null, not left out",
+    M.buildUpdateRequest({name: "x", ownerId: ""}).ownerId, null],
+
+  // a story handed back to the form it came from
+  ["the name comes back",
+    M.formFromDetail({name: "Fix the thing"}).name, "Fix the thing"],
+  ["an unset type defaults, same as a fresh form",
+    M.formFromDetail({}).storyType, "feature"],
+  ["the first owner becomes the form's one owner",
+    M.formFromDetail({ownerIds: ["ada-uuid", "me-uuid"]}).ownerId, "ada-uuid"],
+  ["no owners means unassigned",
+    M.formFromDetail({ownerIds: []}).ownerId, ""],
+  ["an iteration id turns back into a string",
+    M.formFromDetail({iterationId: 42}).iterationId, "42"],
+  ["no iteration is an empty string, not \"null\"",
+    M.formFromDetail({iterationId: null}).iterationId, ""],
+  ["a PR link never comes back -- retitling from one is not offered here",
+    M.formFromDetail({name: "x"}).externalLinks.length, 0],
+
   // GitHub pull requests
   ["a PR URL is recognised",
     !!M.parseGithubPrUrl("https://github.com/acme/app/pull/42"), true],
@@ -795,6 +875,13 @@ cases.push(
     JSON.stringify(M.applyMove(stories, 99, 5004)), JSON.stringify(stories)],
   ["a new story goes on top", M.prependCreated(stories, {id: 5, name: "E"})[0].name, "E"],
   ["and is never doubled",    M.prependCreated(stories, {id: 1, name: "A again"}).filter(s => s.id === 1).length, 1],
+  ["an edit does not touch the input",
+    (() => { const before = JSON.stringify(stories); M.applyUpdate(stories, {id: 1, name: "Renamed"}); return JSON.stringify(stories) === before })(), true],
+  ["an edit lands",           M.applyUpdate(stories, {id: 1, name: "Renamed"}).find(s => s.id === 1).name, "Renamed"],
+  ["an edit keeps what it does not touch",
+    M.applyUpdate(stories, {id: 1, name: "Renamed"}).find(s => s.id === 1).workflowStateId, 5002],
+  ["an edit to nothing is a no-op",
+    JSON.stringify(M.applyUpdate(stories, {id: 99, name: "Ghost"})), JSON.stringify(stories)],
   ["just now",                M.relativeTime("2026-09-22T10:00:00Z", Date.parse("2026-09-22T10:00:30Z") / 1000), "just now"],
   ["minutes",                 M.relativeTime("2026-09-22T10:00:00Z", Date.parse("2026-09-22T10:04:00Z") / 1000), "4 min ago"],
   ["one hour reads singular", M.relativeTime("2026-09-22T10:00:00Z", Date.parse("2026-09-22T11:00:00Z") / 1000), "1 hour ago"],

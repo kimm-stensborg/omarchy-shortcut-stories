@@ -111,6 +111,7 @@ Item {
   readonly property bool stale: !!(root.refs && root.refs.stale)
 
   signal storyCreated(var story)
+  signal storyUpdated(var story)
   signal prReady(var pr)
   signal storyMoved(int storyId)
 
@@ -193,8 +194,44 @@ Item {
     }
     root.actionError = ""
     root.creating = true
-    createProc.body = JSON.stringify(Model.buildCreateRequest(form, root.refs))
-    createProc.running = true
+    root.runWithStdin([root.cli, "create"], root.cliEnvironment,
+      JSON.stringify(Model.buildCreateRequest(form, root.refs)), root.takeCreate)
+  }
+
+  // A fresh Process per call, rather than one reused Process piped each time.
+  // Quickshell does not reliably reopen a stdin channel it has already closed
+  // once on the same Process instance, so a second reuse can send the child
+  // an empty stdin (bin/shortcut then sees no JSON at all). See createStory
+  // and launchSolve, the two callers that hand a body over on stdin.
+  function runWithStdin(command, environment, body, onDone) {
+    var proc = stdinProcess.createObject(root, {
+      command: command, environment: environment || ({}), body: body, onDone: onDone
+    })
+    proc.running = true
+  }
+
+  Component {
+    id: stdinProcess
+    Process {
+      property string body: "{}"
+      property var onDone: null
+      stdinEnabled: true
+      onStarted: {
+        write(body)
+        // Closing stdin in the same tick as onStarted can race the write and
+        // truncate it; the write reaches the child once and stdin closes
+        // cleanly if the close waits a tick.
+        Qt.callLater(function() { stdinEnabled = false })
+      }
+      stdout: StdioCollector {
+        waitForEnd: true
+        onStreamFinished: {
+          var done = onDone
+          if (done) done(text)
+          destroy()
+        }
+      }
+    }
   }
 
   function lookupPr(url) {
@@ -246,6 +283,45 @@ Item {
     }
   }
 
+  // The story being rewritten, or 0 for none. Set from the detail view's Edit
+  // button; the compose form takes over the pane until this clears, either
+  // because the save landed or because Esc backed out of it.
+  property int editingId: 0
+  property bool updating: false
+
+  function beginEdit(storyId) { root.editingId = storyId }
+  function cancelEdit() { root.editingId = 0 }
+
+  function updateStory(storyId, form) {
+    if (root.updating) return
+    var check = Model.validateForm(form)
+    if (!check.ok) { root.actionError = check.errors.name; return }
+    root.actionError = ""
+    root.updating = true
+    root.runWithStdin([root.cli, "update", String(storyId)], root.cliEnvironment,
+      JSON.stringify(Model.buildUpdateRequest(form)), root.takeUpdate)
+  }
+
+  function takeUpdate(text) {
+    root.updating = false
+    var parsed = parse(text)
+    if (parsed && parsed.ok && parsed.story) {
+      root.editingId = 0
+      if (root.detail && root.detail.id === parsed.story.id) {
+        var next = {}
+        for (var k in root.detail) next[k] = root.detail[k]
+        for (var k2 in parsed.story) next[k2] = parsed.story[k2]
+        root.detail = next
+      }
+      root.stories = Model.applyUpdate(root.stories, parsed.story)
+      root.storyUpdated(parsed.story)
+      // Same reasoning as takeCreate: the search index trails the write.
+      catchUpTimer.restart()
+    } else {
+      root.actionError = parsed && parsed.error ? parsed.error : "bin/shortcut gave no answer"
+    }
+  }
+
   function moveStory(storyId, stateId) {
     if (root.movingStory) return
     root.actionError = ""
@@ -274,6 +350,7 @@ Item {
     root.solveError = ""
     root.solveReview = false
     root.solvePending = false
+    root.editingId = 0
     root.loadingDetail = true
     root.refreshWorkspaces()
     detailProc.command = [root.cli, "show", String(storyId)]
@@ -287,6 +364,7 @@ Item {
     root.solveReview = false
     root.solvePending = false
     root.solveError = ""
+    root.editingId = 0
   }
 
   function takeDetail(text) {
@@ -392,13 +470,13 @@ Item {
   }
 
   function launchSolve(workspace, worktree, prompt) {
-    if (!workspace || !root.detail || root.solving || solveProc.running) return
+    if (!workspace || !root.detail || root.solving) return
     var raw = root.detail
     var text = prompt !== undefined && prompt !== null && String(prompt) !== ""
       ? String(prompt) : Model.solvePrompt(raw, root.refs, !!worktree)
     root.solveError = ""
     root.solving = true
-    solveProc.body = JSON.stringify({
+    root.runWithStdin([root.solveCli, "start"], ({}), JSON.stringify({
       workspaceId: String(workspace.id || ""),
       cwd: String(workspace.cwd || ""),
       worktree: !!worktree,
@@ -406,8 +484,7 @@ Item {
       agent: Model.solveAgentName(raw.id),
       branch: Model.solveBranch(raw.id),
       prompt: text
-    })
-    solveProc.running = true
+    }), root.takeSolve)
   }
 
   function takeSolve(text) {
@@ -561,24 +638,6 @@ Item {
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.takeStories(text) }
   }
 
-  // The story goes in on stdin, never argv: a description is multiline and
-  // full of quotes and $, and argv is world-readable through ps besides.
-  // stdinEnabled goes false straight after the write, because that is what
-  // closes the pipe and lets the script's `cat` return.
-  Process {
-    id: createProc
-    property string body: "{}"
-    command: [root.cli, "create"]
-    environment: root.cliEnvironment
-    stdinEnabled: true
-    onStarted: {
-      write(createProc.body)
-      createProc.body = "{}"
-      stdinEnabled = false
-    }
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.takeCreate(text) }
-  }
-
   // gh speaks to GitHub; this process never sees the Shortcut token. The URL
   // is argv rather than stdin because it is a single short string with no
   // quotes to protect, and the panel never puts a secret there.
@@ -603,21 +662,6 @@ Item {
   Process {
     id: spacesProc
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.takeWorkspaces(text) }
-  }
-
-  // The story goes in on stdin, same as create: the prompt is the description
-  // and the comments, and argv would put that text where ps can read it.
-  Process {
-    id: solveProc
-    property string body: "{}"
-    command: [root.solveCli, "start"]
-    stdinEnabled: true
-    onStarted: {
-      write(solveProc.body)
-      solveProc.body = "{}"
-      stdinEnabled = false
-    }
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.takeSolve(text) }
   }
 
   // ---- Timers.

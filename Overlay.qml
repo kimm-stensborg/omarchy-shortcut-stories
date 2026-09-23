@@ -27,6 +27,10 @@ Item {
   property bool opened: false
   property string mode: "compose"          // compose | mine | settings
   property var form: Model.emptyForm()
+  // The edit form is a separate draft from the one above: opening an edit
+  // must not disturb a new story you were halfway through composing, and
+  // backing out of one must not leave the other holding stale field values.
+  property var editForm: Model.emptyForm()
   property bool discardArmed: false
 
   // ---- Theme. Read once, so a theme change moves every colour at once.
@@ -167,6 +171,16 @@ Item {
   // close. A draft with anything in it costs a second Esc, because a reflex
   // keystroke should not throw away a story you were halfway through writing.
   function escapePressed() {
+    // Editing is a detour off the detail view, not a mode of its own, so it
+    // gets first refusal on Esc -- a dropdown or a focused field still eats it
+    // first, same as compose -- and backs out to the story rather than
+    // closing the panel.
+    if (root.store && root.store.editingId) {
+      var editPane = paneLoader.item
+      if (editPane && typeof editPane.escapePressed === "function" && editPane.escapePressed()) return
+      root.store.cancelEdit()
+      return
+    }
     if (root.storyOpen && root.mode === "mine") { root.store.closeStory(); return }
     var pane = paneLoader.item
     if (pane && typeof pane.escapePressed === "function" && pane.escapePressed()) {
@@ -201,6 +215,15 @@ Item {
         root.store.createAfterPr = false
         root.store.createStory(root.form)
       }
+    }
+    // The edit form is filled the moment an edit starts, from whatever detail
+    // is already open (Edit only ever comes from the open story's own pane).
+    // Clearing it back to empty when the edit ends, rather than leaving the
+    // last story's text sitting there, keeps a stray read of it harmless.
+    function onEditingIdChanged() {
+      root.editForm = root.store.editingId
+        ? Model.formFromDetail(root.store.detail)
+        : Model.emptyForm()
     }
   }
 
@@ -325,9 +348,10 @@ Item {
             // meant to do without would be a circle.
             sourceComponent: root.mode === "settings" ? settingsPane
               : (root.locked ? tokenPane
-                : (root.mode === "compose" ? composePane
-                  : (root.storyOpen && root.store && root.store.solveReview ? solvePane
-                    : (root.storyOpen ? detailPane : storiesPane))))
+                : (root.store && root.store.editingId ? composePane
+                  : (root.mode === "compose" ? composePane
+                    : (root.storyOpen && root.store && root.store.solveReview ? solvePane
+                      : (root.storyOpen ? detailPane : storiesPane)))))
             onLoaded: Qt.callLater(function() { root.focusPane() })
           }
 
@@ -365,6 +389,8 @@ Item {
     if (root.store && root.store.stale) return "Showing reference data from earlier — Ctrl+R to retry"
     if (root.store && root.store.loadingPr)
       return "Reading the pull request…"
+    if (root.store && root.store.editingId)
+      return root.store.updating ? "Saving…" : "Enter saves it · Tab moves on · Esc cancels the edit"
     if (root.mode === "compose")
       return "Enter files it · a GitHub PR link fills it in · Tab moves on · Alt+2 your stories · Esc closes"
     if (root.store && root.store.solving)
@@ -374,7 +400,7 @@ Item {
     if (root.mode === "mine" && root.storyOpen && root.store && root.store.solveReview)
       return "Enter starts · Ctrl+Enter from the prompt · ← → workspace · W a worktree · Esc back"
     if (root.mode === "mine" && root.storyOpen)
-      return "Alt+A solves it · ← → pick a state · Enter moves it · Ctrl+O opens it · Esc back"
+      return "Alt+A solves it · ← → pick a state · Enter moves it · Ctrl+E edits it · Esc back"
     if (root.mode === "mine")
       return "Enter opens a story · Alt+I the current sprint · Ctrl+O in your browser · Esc closes"
     return "Ctrl+R refreshes · Alt+1 a new story · Esc closes"

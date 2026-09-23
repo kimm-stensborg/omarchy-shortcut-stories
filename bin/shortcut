@@ -7,12 +7,13 @@
 #   shortcut logout            forget the stored token and the cached reference data
 #   shortcut refs [--force]    teams, workflows, members, iterations and you
 #   shortcut create            read one JSON object on stdin and file it as a story
+#   shortcut update <id>       read one JSON object on stdin and rewrite the story with it
 #   shortcut pr <url>          read a GitHub pull request (title, body, url) for the form
 #   shortcut mine [--limit N]  the stories assigned to you that are not done
 #   shortcut move <id> <state> move a story to another workflow state
 #   shortcut show <id>         one story in full: description, tasks and comments
 #
-# refs, create, pr, mine, move and show always print a single JSON object, {"ok": false,
+# refs, create, update, pr, mine, move and show always print a single JSON object, {"ok": false,
 # "code": ..., "error": ...} on failure, so the panel has exactly one thing to
 # parse. login and logout print human lines instead: they run in a terminal,
 # where a JSON blob is no use to the person reading it.
@@ -277,6 +278,49 @@ cmd_create() {
     fail "Shortcut sent an unreadable story" http
 }
 
+# Same shape as create, minus workflow_state_id and external_links: moving a
+# story between states is the move strip's job, and re-filing its PR link is
+# not something the edit form offers. Iteration and owner go in even when
+# empty, as null and [] -- create leaves an empty field out and lets Shortcut
+# default it, but an edit has to be able to clear a sprint or unassign a story,
+# which leaving the key out cannot do.
+cmd_update() {
+  local story=${1:-}
+  [[ $story =~ ^[0-9]+$ ]] || fail "update needs a story id" usage
+  local input; input=$(cat)
+  jq -e 'type == "object" and (.name | type) == "string" and ((.name | gsub("^\\s+|\\s+$"; "")) | length) > 0' \
+    <<<"$input" >/dev/null 2>&1 || fail "update needs a JSON object with a name" usage
+
+  if [[ -n ${SHORTCUT_DEMO:-} ]]; then
+    jq -cn --slurpfile in <(printf '%s' "$input") --argjson id "$story" '{ok: true, story: {
+      id: $id, name: ($in[0].name | gsub("^\\s+|\\s+$"; "")),
+      storyType: ($in[0].storyType // "feature"),
+      appUrl: "https://app.shortcut.com/demo/story/\($id)",
+      description: ($in[0].description // ""),
+      groupId: ($in[0].groupId // ""),
+      iterationId: $in[0].iterationId,
+      ownerIds: (if ($in[0].ownerId // null) != null then [$in[0].ownerId] else [] end),
+      updatedAt: "2026-09-22T12:00:00Z"}}'
+    return
+  fi
+
+  jq -c '
+    {name: (.name | gsub("^\\s+|\\s+$"; ""))}
+    + {description: ((.description // "") | gsub("\\s+$"; ""))}
+    + (if (.storyType // "") != "" then {story_type: .storyType} else {} end)
+    + (if (.groupId // "") != "" then {group_id: .groupId} else {} end)
+    + {iteration_id: (.iterationId // null)}
+    + {owner_ids: (if (.ownerId // null) != null then [.ownerId] else [] end)}
+  ' <<<"$input" >"$WORK/body.json" || fail "update could not build a story" usage
+
+  load_token
+  local status; status=$(api PUT "/stories/$story" "$WORK/updated" "$WORK/body.json")
+  check_status "$status" "$WORK/updated" "Updating the story"
+
+  jq -c "{ok: true, story: ($story_summary + {description: (.description // \"\")})}" "$WORK/updated" ||
+    fail "Shortcut sent an unreadable story" http
+}
+
 # A GitHub pull request URL becomes the story's title and description. gh is
 # what talks to GitHub — this script never holds a GitHub token of its own —
 # and the Shortcut token is not involved at all.
@@ -485,6 +529,7 @@ cmd_logout() {
 case ${1:-} in
   refs) shift; cmd_refs "$@" ;;
   create) cmd_create ;;
+  update) shift; cmd_update "$@" ;;
   pr) shift; cmd_pr "$@" ;;
   mine) shift; cmd_mine "$@" ;;
   move) shift; cmd_move "$@" ;;

@@ -375,6 +375,39 @@ function buildCreateRequest(form, refs) {
   return body
 }
 
+// A story already on Shortcut, turned back into the same shape the compose
+// form edits. Only the fields the form offers come back — labels, tasks,
+// comments and the rest stay on the story, untouched by an edit.
+function formFromDetail(raw) {
+  return {
+    name: str(raw && raw.name),
+    description: str(raw && raw.description),
+    storyType: str(raw && raw.storyType) || "feature",
+    groupId: str(raw && raw.groupId),
+    iterationId: raw && raw.iterationId !== null && raw.iterationId !== undefined
+      ? str(raw.iterationId) : "",
+    ownerId: (raw && raw.ownerIds && raw.ownerIds.length) ? str(raw.ownerIds[0]) : "",
+    externalLinks: []
+  }
+}
+
+// What goes on bin/shortcut's stdin for an edit. Unlike create, every field
+// here is sent as it stands in the form -- including empty -- because this is
+// not a blank the API should default: an edit that clears the sprint or the
+// owner has to say so, not leave the key out and change nothing.
+function buildUpdateRequest(form) {
+  var iteration = parseInt(str(form && form.iterationId), 10)
+  var owner = str(form && form.ownerId)
+  return {
+    name: trim(form && form.name),
+    description: str(form && form.description).replace(/\s+$/, ""),
+    storyType: str(form && form.storyType) || "feature",
+    groupId: str(form && form.groupId),
+    iterationId: isFinite(iteration) ? iteration : null,
+    ownerId: owner !== "" ? owner : null
+  }
+}
+
 // Is there anything here worth a second Esc before it is thrown away?
 function draftIsDirty(form, defaults) {
   var base = emptyForm(defaults)
@@ -584,6 +617,18 @@ function applyMove(stories, storyId, stateId) {
     var copy = {}
     for (var k in s) copy[k] = s[k]
     copy.workflowStateId = stateId
+    return copy
+  })
+}
+
+// Optimistic, like applyMove above: the edited fields land on the list row
+// now, rather than waiting for the next poll to notice.
+function applyUpdate(stories, story) {
+  return (stories || []).map(function(s) {
+    if (!story || s.id !== story.id) return s
+    var copy = {}
+    for (var k in s) copy[k] = s[k]
+    for (var k2 in story) copy[k2] = story[k2]
     return copy
   })
 }
@@ -1165,6 +1210,7 @@ if (typeof module !== "undefined") {
     parseGithubPrUrl: parseGithubPrUrl, prSourceLabel: prSourceLabel,
     applyPrToForm: applyPrToForm,
     buildCreateRequest: buildCreateRequest, draftIsDirty: draftIsDirty,
+    formFromDetail: formFromDetail, buildUpdateRequest: buildUpdateRequest,
     clearForm: clearForm, destinationLabel: destinationLabel,
     summarizeStory: summarizeStory, storyComments: storyComments,
     storyDetail: storyDetail,
@@ -1172,7 +1218,7 @@ if (typeof module !== "undefined") {
     sectionTitle: sectionTitle,
     currentIterations: currentIterations, currentIterationLabel: currentIterationLabel,
     storiesInScope: storiesInScope,
-    applyMove: applyMove,
+    applyMove: applyMove, applyUpdate: applyUpdate,
     prependCreated: prependCreated, relativeTime: relativeTime,
     SETTINGS: SETTINGS, settingsPage: settingsPage, settingRow: settingRow, choiceList: choiceList,
     coerceSetting: coerceSetting, readSetting: readSetting,

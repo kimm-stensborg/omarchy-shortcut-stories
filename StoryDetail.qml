@@ -82,6 +82,10 @@ Item {
       Quickshell.execDetached(["omarchy-launch-browser", view.detail.appUrl])
   }
 
+  function editStory() {
+    if (view.store && view.detail) view.store.beginEdit(view.detail.id)
+  }
+
   Item {
     id: keys
     anchors.fill: parent
@@ -92,6 +96,7 @@ Item {
       var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
       var alt = (event.modifiers & Qt.AltModifier) !== 0
       if (ctrl && event.key === Qt.Key_O) { view.openInBrowser(); event.accepted = true; return }
+      if (ctrl && event.key === Qt.Key_E) { view.editStory(); event.accepted = true; return }
       if (alt && event.key === Qt.Key_A) {
         if (view.store) view.store.armSolve()
         event.accepted = true
@@ -148,6 +153,16 @@ Item {
           font.family: view.fontFamily
           font.pixelSize: Style.font.subtitle
           font.bold: true
+        }
+
+        Button {
+          visible: !!view.detail
+          bordered: true
+          text: "Edit"
+          tooltipText: "Change what this story says (Ctrl+E)"
+          foreground: view.accent
+          fontFamily: view.fontFamily
+          onClicked: view.editStory()
         }
 
         Button {

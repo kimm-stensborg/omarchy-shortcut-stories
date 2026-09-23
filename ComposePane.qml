@@ -14,10 +14,15 @@ Item {
   property var overlay: null
   property var store: null
 
-  readonly property var form: pane.overlay ? pane.overlay.form : ({})
+  // Editing an existing story reuses this whole form rather than a second
+  // copy of it: same fields, same picker wiring, just a different draft
+  // underneath and a different verb at the end.
+  readonly property bool editing: !!(pane.store && pane.store.editingId)
+  readonly property var form: pane.overlay ? (pane.editing ? pane.overlay.editForm : pane.overlay.form) : ({})
   readonly property var refs: pane.overlay ? pane.overlay.refs : null
   readonly property bool hasRefs: pane.overlay ? pane.overlay.hasRefs : false
-  readonly property bool busy: pane.store ? (pane.store.creating || pane.store.loadingPr) : false
+  readonly property bool busy: pane.store
+    ? (pane.editing ? pane.store.updating : (pane.store.creating || pane.store.loadingPr)) : false
   readonly property string prLabel: Model.prSourceLabel(pane.form)
 
   readonly property color foreground: pane.overlay ? pane.overlay.foreground : Color.menu.text
@@ -40,7 +45,9 @@ Item {
       for (var i = 0; i < allowed.length; i++) if (allowed[i].value === next.iterationId) keep = true
       if (!keep) next.iterationId = ""
     }
-    if (pane.overlay) pane.overlay.form = next
+    if (!pane.overlay) return
+    if (pane.editing) pane.overlay.editForm = next
+    else pane.overlay.form = next
   }
 
   function takeFocus() { titleField.forceActiveFocus() }
@@ -57,7 +64,8 @@ Item {
 
   function submit() {
     if (pane.busy || !pane.store) return
-    pane.store.createStory(pane.form)
+    if (pane.editing) pane.store.updateStory(pane.store.editingId, pane.form)
+    else pane.store.createStory(pane.form)
   }
 
   // A pasted GitHub PR URL is looked up after a short pause so a mid-edit
@@ -67,7 +75,10 @@ Item {
     id: prLookup
     interval: 350
     onTriggered: {
-      if (!pane.store) return
+      // Retitling an existing story from a PR link is not a feature the edit
+      // form offers -- Save just files whatever the title says, PR-shaped or
+      // not.
+      if (!pane.store || pane.editing) return
       var parsed = Model.parseGithubPrUrl(pane.form.name)
       if (!parsed) return
       // Already filled from this same PR — leave the title alone.
@@ -96,7 +107,7 @@ Item {
       id: titleField
       Layout.fillWidth: true
       text: pane.form.name || ""
-      placeholderText: "What needs doing? Or a GitHub PR link"
+      placeholderText: pane.editing ? "What needs doing?" : "What needs doing? Or a GitHub PR link"
       foreground: pane.foreground
       accent: pane.accent
       font.family: pane.fontFamily
@@ -279,6 +290,10 @@ Item {
 
         Text {
           Layout.fillWidth: true
+          // Where a new story lands is a landing state picked from the team --
+          // exactly what an edit must not silently do to a story that already
+          // has one. "Move to" on the detail view is the place for that.
+          visible: !pane.editing
           elide: Text.ElideRight
           color: pane.muted
           font.family: pane.fontFamily
@@ -306,8 +321,10 @@ Item {
       Button {
         bordered: true
         enabled: !pane.busy
-        text: pane.store && pane.store.loadingPr ? "Reading…"
-          : (pane.store && pane.store.creating ? "Filing..." : "Create story")
+        text: pane.editing
+          ? (pane.store && pane.store.updating ? "Saving..." : "Save changes")
+          : (pane.store && pane.store.loadingPr ? "Reading…"
+            : (pane.store && pane.store.creating ? "Filing..." : "Create story"))
         foreground: pane.busy ? pane.muted : pane.accent
         fontFamily: pane.fontFamily
         onClicked: pane.submit()
