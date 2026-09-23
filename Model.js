@@ -634,6 +634,34 @@ function destinationLabel(form, refs) {
   return str(group.name) + " → " + (found ? str(found.state.name) : "its default state")
 }
 
+// A story's other links -- every external link that is not the PR the
+// header already has a chip for -- as chips of their own, labelled by where
+// they go: figma.com, docs.google.com. The full address is the tooltip. A
+// GitHub link that is not a PR (an issue, a file) says so by its path.
+function linkChips(links, prUrl) {
+  var pr = parseGithubPrUrl(prUrl)
+  var out = []
+  var seen = []
+  var list = links || []
+  for (var i = 0; i < list.length; i++) {
+    var url = trim(list[i])
+    if (url === "" || seen.indexOf(url) !== -1) continue
+    var asPr = parseGithubPrUrl(url)
+    if (pr && asPr && asPr.url === pr.url) continue
+    seen.push(url)
+    var m = url.match(/^[a-z][a-z0-9+.-]*:\/\/(?:www\.)?([^\/?#:]+)([^?#]*)/i)
+    var host = m ? m[1].toLowerCase() : url
+    var label = host
+    if (asPr) label = prRefLabel(url)
+    else if (host === "github.com" && m) {
+      var parts = m[2].split("/").filter(function(p) { return p !== "" })
+      if (parts.length >= 2) label = parts.slice(0, 2).join("/") + (parts.length > 3 ? " " + parts[2] + " " + parts[3] : "")
+    }
+    out.push({ url: url, label: label, github: host === "github.com" })
+  }
+  return out
+}
+
 // ---- the story list.
 
 function summarizeStory(story, refs) {
@@ -1672,7 +1700,7 @@ if (typeof module !== "undefined") {
     ownerChips: ownerChips, ownerAddOptions: ownerAddOptions,
     fileList: fileList, addFiles: addFiles, removeFile: removeFile, withScreenshots: withScreenshots,
     composeEscape: composeEscape, cameFrom: cameFrom,
-    commonStateName: commonStateName, storyRows: storyRows,
+    commonStateName: commonStateName, storyRows: storyRows, linkChips: linkChips,
     editBase: editBase, buildUpdatePatch: buildUpdatePatch, resolveIterationSetting: resolveIterationSetting,
     SOLVE_PROMPT_LIMIT: SOLVE_PROMPT_LIMIT,
     solveAgentName: solveAgentName, solveBranch: solveBranch,

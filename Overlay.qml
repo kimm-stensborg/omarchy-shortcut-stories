@@ -489,7 +489,9 @@ Item {
       return "Enter starts · Ctrl+Enter from the prompt · ← → workspace · W a worktree · Esc back"
     if (root.mode === "mine" && root.storyOpen)
       return "Alt+A solves it · " + (root.store.prCanOpen ? "Alt+P opens a PR · " : "")
-        + "← → pick a state · Enter moves it · Ctrl+E edits it · Esc back"
+        + "← → pick a state · Enter moves it · Ctrl+E edits it · Ctrl+O Shortcut"
+        + (root.store.prStatus || Model.firstPrLink(root.store.detail && root.store.detail.externalLinks) ? " · Ctrl+G GitHub" : "")
+        + " · Esc back"
     if (root.mode === "mine")
       return "Enter opens a story · Alt+I the current sprint · Ctrl+O in your browser · Esc closes"
     return "Ctrl+R refreshes · Alt+1 a new story · Esc closes"

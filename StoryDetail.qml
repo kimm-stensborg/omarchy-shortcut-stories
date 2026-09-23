@@ -103,6 +103,13 @@ Item {
       Quickshell.execDetached(["omarchy-launch-browser", view.detail.appUrl])
   }
 
+  function openPr() {
+    if (view.prUrl !== "") Quickshell.execDetached(["omarchy-launch-browser", view.prUrl])
+  }
+
+  // Every other link on the story, for chips of their own.
+  readonly property var otherLinks: view.raw ? Model.linkChips(view.raw.externalLinks, view.prUrl) : []
+
   function editStory() {
     if (view.store && view.detail) view.store.beginEdit(view.detail.id)
   }
@@ -127,6 +134,14 @@ Item {
   }
   Timer { id: refCopiedTimer; interval: 1500; onTriggered: view.refCopied = false }
 
+  property string linkCopied: ""
+  function copyLink(url) {
+    Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(url) + " | wl-copy"])
+    view.linkCopied = url
+    linkCopiedTimer.restart()
+  }
+  Timer { id: linkCopiedTimer; interval: 1500; onTriggered: view.linkCopied = "" }
+
   Item {
     id: keys
     anchors.fill: parent
@@ -137,6 +152,7 @@ Item {
       var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
       var alt = (event.modifiers & Qt.AltModifier) !== 0
       if (ctrl && event.key === Qt.Key_O) { view.openInBrowser(); event.accepted = true; return }
+      if (ctrl && event.key === Qt.Key_G) { view.openPr(); event.accepted = true; return }
       if (ctrl && event.key === Qt.Key_E) { view.editStory(); event.accepted = true; return }
       if (alt && event.key === Qt.Key_A) {
         if (view.store) view.store.armSolve()
@@ -239,39 +255,41 @@ Item {
 
       // ---- What the story is and where its work has got to, as a row of
       // chips under the title, in the same shape as the move strip: the
-      // reference, the pull request and how it is doing, and the agent Solve
-      // started. Colour carries the news -- red for a failing check or
-      // changes asked for, the accent for merged, approved, or an agent
-      // that wants you back.
+      // reference, the pull request and how it is doing, the agent Solve
+      // started, and any other link on the story. Colour carries the news --
+      // red for a failing check or changes asked for, the accent for merged,
+      // approved, or an agent that wants you back. A click on a link chip
+      // opens it in the browser; a right-click copies it.
       Flow {
         Layout.fillWidth: true
         visible: !!view.detail
         spacing: Style.spacing.controlGap
 
-        // A click copies the reference, for a commit message or a chat.
+        // The story in Shortcut; right-click copies the reference, for a
+        // commit message or a chat.
         Button {
           bordered: true
           iconText: view.detail ? view.detail.glyph : ""
           text: view.detail ? view.detail.ref : ""
-          tooltipText: view.refCopied ? "Copied!" : "Copy " + (view.detail ? view.detail.ref : "")
+          tooltipText: view.refCopied ? "Copied!"
+            : "Open in Shortcut (Ctrl+O) · right-click copies " + (view.detail ? view.detail.ref : "")
           foreground: view.muted
           fontFamily: view.fontFamily
           fontSize: Style.font.caption
           iconSize: Style.font.caption
           horizontalPadding: Style.space(8)
           verticalPadding: Style.space(3)
-          onClicked: view.copyRef()
+          onClicked: view.openInBrowser()
+          onRightClicked: view.copyRef()
         }
 
-        // A click copies the URL rather than opening it -- Open above
-        // already does that for the story, and a PR link is usually wanted
-        // to paste somewhere else, not to visit.
+        // The pull request on GitHub; right-click copies its link.
         Button {
           visible: view.prUrl !== ""
           bordered: true
           iconText: ""
           text: Model.prRefLabel(view.prUrl) + (view.prStatus && view.prStatus.summary ? "  ·  " + view.prStatus.summary : "")
-          tooltipText: view.prCopied ? "Copied!" : "Copy the pull request link"
+          tooltipText: view.prCopied ? "Copied!" : "Open on GitHub (Ctrl+G) · right-click copies the link"
           foreground: !view.prStatus ? view.muted
             : view.prStatus.tone === "bad" ? view.urgent
             : view.prStatus.tone === "good" ? view.accent : view.muted
@@ -280,7 +298,8 @@ Item {
           iconSize: Style.font.caption
           horizontalPadding: Style.space(8)
           verticalPadding: Style.space(3)
-          onClicked: view.copyPrLink()
+          onClicked: view.openPr()
+          onRightClicked: view.copyPrLink()
         }
 
         Button {
@@ -295,6 +314,26 @@ Item {
           iconSize: Style.font.caption
           horizontalPadding: Style.space(8)
           verticalPadding: Style.space(3)
+        }
+
+        Repeater {
+          model: view.otherLinks
+
+          Button {
+            required property var modelData
+            bordered: true
+            iconText: modelData.github ? "" : ""
+            text: modelData.label
+            tooltipText: view.linkCopied === modelData.url ? "Copied!" : modelData.url + " · right-click copies it"
+            foreground: view.muted
+            fontFamily: view.fontFamily
+            fontSize: Style.font.caption
+            iconSize: Style.font.caption
+            horizontalPadding: Style.space(8)
+            verticalPadding: Style.space(3)
+            onClicked: Quickshell.execDetached(["omarchy-launch-browser", modelData.url])
+            onRightClicked: view.copyLink(modelData.url)
+          }
         }
       }
 

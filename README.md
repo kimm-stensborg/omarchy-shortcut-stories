@@ -131,8 +131,9 @@ all of them, and the button says so. A story with no sprint is not in that
 list. The choice is remembered.
 
 In an **open story**: `←` `→` pick a state and `Enter` moves it there,
-`Ctrl + O` opens it in your browser, `Alt + A` solves it, `Alt + P` opens
-its pull request, and `Esc` goes back to the list.
+`Ctrl + O` opens it in Shortcut, `Ctrl + G` opens its pull request on
+GitHub, `Alt + A` solves it, `Alt + P` opens a pull request for it, and
+`Esc` goes back to the list.
 
 ## Writing a story
 
@@ -214,9 +215,11 @@ and the comments. The description and the comments are rendered rather than
 left as markdown source. That is the part you need in front of you to
 actually do the work, and it is why the list does not try to show it.
 
-Under the title sits a row of chips: the reference -- a click copies
-`sc-1234`, for a commit message or a chat -- and, when there are any, its
-pull request and the agent working on it.
+Under the title sits a row of chips: the reference, its pull request, the
+agent working on it, and every other link on the story -- a Figma file, a
+doc, a GitHub issue -- labelled by where it goes. A click opens the story in
+Shortcut, the PR on GitHub, or the link; a right-click copies it instead,
+`sc-1234` for a commit message or the address to paste somewhere.
 
 The description runs the full width of the card rather than sharing it with
 the facts, because it is prose and a narrow column of prose is harder to read.
