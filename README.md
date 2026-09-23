@@ -145,6 +145,13 @@ with whoever **Owner** in the settings names.
 Editing a story keeps every owner it already has, including ones the form
 did not touch, so renaming a story shared between two people leaves both on it.
 
+Saving an edit sends only the fields you changed. A field you left alone is
+not written back, so a colleague who rewrote the description while you fixed
+the title keeps their description. Before it writes, the story is read again.
+If someone changed one of *your* fields in Shortcut since you pressed Edit,
+nothing is saved and the panel says which field. Open the story again to see
+their version.
+
 Filing a story clears the title, the description and the type, and leaves the
 team, iteration and owners where they were -- five stories in a row usually
 belong to the same sprint. Turn that off with **Keep team and iteration after
@@ -305,9 +312,9 @@ bin/solve workspaces | jq '.workspaces[].label'
 back. It talks to Herdr only. It never sees the Shortcut token.
 
 Everything but `login` and `logout` prints one JSON object, `{"ok": false,
-"code": ..., "error": ...}` when something went wrong. `create` reads its
-story from stdin rather than taking flags, so a description with quotes,
-newlines and `$` in it survives.
+"code": ..., "error": ...}` when something went wrong. `create` and `update`
+read their story from stdin rather than taking flags, so a description with
+quotes, newlines and `$` in it survives.
 
 ## Files
 

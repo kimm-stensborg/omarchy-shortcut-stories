@@ -369,8 +369,42 @@ is "the type is renamed"          "$(jq -r .story_type <<<"$body")" "chore"
 is "the team is renamed"          "$(jq -r .group_id <<<"$body")" "g2"
 is "the iteration is a number"    "$(jq -r '.iteration_id | type' <<<"$body")" "number"
 is "every owner stays on"        "$(jq -c .owner_ids <<<"$body")" '["ada-uuid","me-uuid"]'
-is "no PR link means an empty list" "$(jq -c .external_links <<<"$body")" "[]"
+hasnt "a field not given is not sent" "$body" "external_links"
 hasnt "the state is never touched" "$body" "workflow_state_id"
+hasnt "without a base nothing is read first" "$(log)" "GET /api/v3/stories/1234"
+
+reset_log
+out=$(printf '%s' '{"description":"only this"}' | s update 1234)
+body=$(log | sed -n 's/.*body=//p' | tail -1)
+is "a patch without a name succeeds" "$(jq -r .ok <<<"$out")" "true"
+is "and sends only what it was given" "$(jq -c 'keys' <<<"$body")" '["description"]'
+
+# base is the story as the edit opened. The mock's GET has description
+# "Body **text**", owners [me] and links [figma, pr 9].
+reset_log
+out=$(printf '%s' '{"description":"new","base":{"description":"Body **text**"}}' | s update 1234)
+is "an unchanged base saves"          "$(jq -r .ok <<<"$out")" "true"
+is "after reading the story first"    "$(log | grep -oE '^(GET|PUT) [^ ]+' | tr '\n' ',')" "GET /api/v3/stories/1234,PUT /api/v3/stories/1234,"
+hasnt "base is never sent to Shortcut" "$(log | sed -n 's/.*body=//p' | tail -1)" "base"
+
+reset_log
+out=$(printf '%s' '{"externalLinks":[],"base":{"externalLinks":["https://github.com/acme/app/pull/9","https://figma.com/file/xyz"]}}' | s update 1234)
+is "links in another order are not a change" "$(jq -r .ok <<<"$out")" "true"
+
+reset_log
+out=$(printf '%s' '{"description":"mine","ownerIds":[],"base":{"description":"What it said before","ownerIds":["ada-uuid"]}}' | s update 1234)
+is "a field changed in Shortcut meanwhile refuses" "$(jq -r .code <<<"$out")" "conflict"
+has "naming what moved"               "$(jq -r .error <<<"$out")" "the description, the owners"
+is "and writes nothing"               "$(log | grep -c 'PUT /api/v3/stories/1234')" "0"
+
+reset_log
+out=$(printf '%s' '{"name":"Mine","base":{"name":"Fix the thing","somethingElse":1}}' | s update 1234)
+is "a base key it does not know is ignored" "$(jq -r .ok <<<"$out")" "true"
+
+reset_log
+out=$(printf '%s' '{"name":"Mine","base":{"name":"Fix the thing"}}' | s update 9999)
+is "a story that is gone fails before writing" "$(jq -r .ok <<<"$out")" "false"
+is "and writes nothing either"        "$(log | grep -c 'PUT')" "0"
 
 reset_log
 out=$(printf '%s' '{"name":"Clear it","groupId":"","iterationId":null,"ownerIds":[]}' | s update 1234)
@@ -400,6 +434,8 @@ out=$(printf '%s' '{"name":"   "}' | s update 1234)
 is "a blank name is refused"    "$(jq -r .code <<<"$out")" "usage"
 out=$(printf '%s' 'not json' | s update 1234)
 is "junk on stdin is refused"   "$(jq -r .code <<<"$out")" "usage"
+out=$(printf '%s' '{"name":"x","base":[]}' | s update 1234)
+is "a base that is not an object is refused" "$(jq -r .code <<<"$out")" "usage"
 is "and neither calls out"      "$(log | wc -l)" "0"
 
 reset_log
@@ -677,6 +713,12 @@ const TODAY = "2026-09-22"
 const labels = (o) => o.map(x => x.label).join(",")
 const values = (o) => o.map(x => x.value).join(",")
 
+// A story as the detail view has it: two owners, a PR link written with a
+// trailing /files, and a Figma link.
+const detailRaw = {id: 1234, name: "Old", description: "Body", storyType: "bug", groupId: "g1",
+  iterationId: 42, ownerIds: ["ada-uuid", "me-uuid"],
+  externalLinks: ["https://github.com/a/b/pull/9/files", "https://figma.com/f/x"]};
+
 const cases = [
   // reference lookups
   ["stale when absent",        M.refsAreStale(null, 2000, 100), true],
@@ -806,6 +848,23 @@ const cases = [
     '["me-uuid","ada-uuid"]'],
   ["no owners is an empty list, not left out",
     JSON.stringify(M.buildUpdateRequest({name: "x", ownerIds: []}).ownerIds), "[]"],
+  // the patch Save sends -- only what changed, and what it was before
+  ["an untouched edit sends nothing",
+    JSON.stringify(M.buildUpdatePatch(M.formFromDetail(detailRaw), M.formFromDetail(detailRaw))), "{}"],
+  ["a rename sends only the name",
+    Object.keys(M.buildUpdatePatch(Object.assign(M.formFromDetail(detailRaw), {name: "New"}),
+      M.formFromDetail(detailRaw))).join(","), "name"],
+  ["with a base, only the renamed field is in it",
+    JSON.stringify(M.buildUpdatePatch(Object.assign(M.formFromDetail(detailRaw), {name: "New"}),
+      M.formFromDetail(detailRaw), M.editBase(detailRaw)).base), '{"name":"Old"}'],
+  ["a changed owner carries the owners as they were",
+    JSON.stringify(M.buildUpdatePatch(Object.assign(M.formFromDetail(detailRaw), {ownerIds: ["me-uuid"]}),
+      M.formFromDetail(detailRaw), M.editBase(detailRaw)).base.ownerIds), '["ada-uuid","me-uuid"]'],
+  ["a base keeps links as the story had them, not as the form rewrote them",
+    JSON.stringify(M.editBase(detailRaw).externalLinks),
+    '["https://github.com/a/b/pull/9/files","https://figma.com/f/x"]'],
+  ["a base on nothing is empty, not a crash",
+    JSON.stringify(M.editBase(null).ownerIds), "[]"],
   ["an edit that only renames keeps a co-owner",
     JSON.stringify(M.buildUpdateRequest(Object.assign(
       M.formFromDetail({name: "Old", ownerIds: ["ada-uuid", "me-uuid"]}), {name: "New"})).ownerIds),

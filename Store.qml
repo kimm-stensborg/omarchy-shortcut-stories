@@ -292,14 +292,17 @@ Item {
   function beginEdit(storyId) { root.editingId = storyId }
   function cancelEdit() { root.editingId = 0 }
 
-  function updateStory(storyId, form) {
+  // seed is the form as the edit opened and base the story as it was then
+  // (Model.editBase). Only what differs from seed is sent, and bin/shortcut
+  // refuses it if Shortcut has moved on from base in any of those fields.
+  function updateStory(storyId, form, seed, base) {
     if (root.updating) return
     var check = Model.validateForm(form)
     if (!check.ok) { root.actionError = check.errors.name; return }
     root.actionError = ""
     root.updating = true
     root.runWithStdin([root.cli, "update", String(storyId)], root.cliEnvironment,
-      JSON.stringify(Model.buildUpdateRequest(form)), root.takeUpdate)
+      JSON.stringify(Model.buildUpdatePatch(form, seed, base)), root.takeUpdate)
   }
 
   function takeUpdate(text) {

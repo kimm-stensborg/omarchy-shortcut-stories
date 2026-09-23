@@ -276,49 +276,79 @@ cmd_create() {
     fail "Shortcut sent an unreadable story" http
 }
 
-# Same shape as create, minus workflow_state_id: moving a story between
-# states is the move strip's job, not the edit form's. Iteration and owners go
-# in even when empty, as null and [] -- create leaves an empty field out and
-# lets Shortcut default it, but an edit has to be able to clear a sprint or
-# unassign a story, which leaving the key out cannot do. ownerIds is every
-# owner the story should end up with, so a co-owner nobody touched stays on.
-# externalLinks is the whole list Shortcut should end up with, not just the
-# one the form shows -- the QML side has already folded the edited PR link
-# back in among whatever else the story had, so this never has to know which
-# entry is which.
+# An edit is a patch, not a rewrite: only the keys on stdin are sent, and the
+# form only puts a field there when you changed it. A field you left alone
+# is never written back, so it cannot undo what someone else did to it
+# meanwhile. The keys are the same as create's, minus workflowStateId --
+# moving a story is the move strip's job. A key that is present goes out even
+# when empty, as null or [], because clearing a sprint or unassigning a story
+# has to say so. ownerIds and externalLinks are whole lists: every owner and
+# every link the story should end up with.
+#
+# base, when given, is what those same fields looked like when the edit was
+# opened. The story is read again first, and if one of them has moved on in
+# Shortcut since, nothing is written and the answer is code "conflict":
+# saving would silently replace someone else's change with yours.
 cmd_update() {
   local story=${1:-}
   [[ $story =~ ^[0-9]+$ ]] || fail "update needs a story id" usage
   local input; input=$(cat)
-  jq -e 'type == "object" and (.name | type) == "string" and ((.name | gsub("^\\s+|\\s+$"; "")) | length) > 0' \
-    <<<"$input" >/dev/null 2>&1 || fail "update needs a JSON object with a name" usage
+  jq -e 'type == "object"
+    and ((has("name") | not) or ((.name | type) == "string" and ((.name | gsub("^\\s+|\\s+$"; "")) | length) > 0))
+    and ((has("base") | not) or (.base | type) == "object")' \
+    <<<"$input" >/dev/null 2>&1 || fail "update needs a JSON object, and a name that is not blank" usage
 
   if [[ -n ${SHORTCUT_DEMO:-} ]]; then
-    jq -cn --slurpfile in <(printf '%s' "$input") --argjson id "$story" '{ok: true, story: {
-      id: $id, name: ($in[0].name | gsub("^\\s+|\\s+$"; "")),
-      storyType: ($in[0].storyType // "feature"),
+    jq -cn --slurpfile in <(printf '%s' "$input") --argjson id "$story" '$in[0] as $e | {ok: true, story: {
+      id: $id, name: (($e.name // "Fix the thing") | gsub("^\\s+|\\s+$"; "")),
+      storyType: ($e.storyType // "feature"),
       appUrl: "https://app.shortcut.com/demo/story/\($id)",
-      description: ($in[0].description // ""),
-      groupId: ($in[0].groupId // ""),
-      iterationId: $in[0].iterationId,
-      ownerIds: [$in[0].ownerIds[]? | select(type == "string")],
-      externalLinks: ($in[0].externalLinks // []),
+      description: ($e.description // ""),
+      groupId: ($e.groupId // ""),
+      iterationId: $e.iterationId,
+      ownerIds: [$e.ownerIds[]? | select(type == "string")],
+      externalLinks: ($e.externalLinks // []),
       updatedAt: "2026-09-22T12:00:00Z"}}'
     return
   fi
 
   jq -c '
-    {name: (.name | gsub("^\\s+|\\s+$"; ""))}
-    + {description: ((.description // "") | gsub("\\s+$"; ""))}
+    (if has("name") then {name: (.name | gsub("^\\s+|\\s+$"; ""))} else {} end)
+    + (if has("description") then {description: ((.description // "") | gsub("\\s+$"; ""))} else {} end)
     + (if (.storyType // "") != "" then {story_type: .storyType} else {} end)
     + (if (.groupId // "") != "" then {group_id: .groupId} else {} end)
-    + {iteration_id: (.iterationId // null)}
-    + {owner_ids: [.ownerIds[]? | select(type == "string") | gsub("^\\s+|\\s+$"; "") | select(length > 0)]}
-    + {external_links: ([.externalLinks[]? | select(type == "string")
-         | gsub("^\\s+|\\s+$"; "") | select(length > 0)])}
+    + (if has("iterationId") then {iteration_id: .iterationId} else {} end)
+    + (if has("ownerIds") then
+         {owner_ids: [.ownerIds[]? | select(type == "string") | gsub("^\\s+|\\s+$"; "") | select(length > 0)]}
+       else {} end)
+    + (if has("externalLinks") then
+         {external_links: [.externalLinks[]? | select(type == "string") | gsub("^\\s+|\\s+$"; "") | select(length > 0)]}
+       else {} end)
   ' <<<"$input" >"$WORK/body.json" || fail "update could not build a story" usage
 
   load_token
+
+  if jq -e 'has("base")' <<<"$input" >/dev/null; then
+    local status; status=$(api GET "/stories/$story" "$WORK/current")
+    check_status "$status" "$WORK/current" "Reading the story"
+    # Both sides in the shape show hands the panel, with lists sorted: the
+    # order of owners or links is not a change anyone made.
+    local moved
+    moved=$(jq -r --slurpfile cur "$WORK/current" '
+      def norm: if type == "array" then sort else . end;
+      ($cur[0] | {name: .name, description: (.description // ""), storyType: .story_type,
+                  groupId: .group_id, iterationId: .iteration_id,
+                  ownerIds: (.owner_ids // []), externalLinks: (.external_links // [])}) as $now
+      | {name: "the title", description: "the description", storyType: "the type",
+         groupId: "the team", iterationId: "the iteration", ownerIds: "the owners",
+         externalLinks: "the links"} as $what
+      | [.base | to_entries[] | select($what[.key] != null)
+         | select((.value | norm) != ($now[.key] | norm)) | $what[.key]]
+      | join(", ")' <<<"$input") || fail "Shortcut sent a story that could not be read" http
+    [[ -z $moved ]] ||
+      fail "Someone changed $moved in Shortcut since you started editing. Open the story again to see it." conflict
+  fi
+
   local status; status=$(api PUT "/stories/$story" "$WORK/updated" "$WORK/body.json")
   check_status "$status" "$WORK/updated" "Updating the story"
 

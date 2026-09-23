@@ -463,13 +463,14 @@ function formFromDetail(raw) {
   }
 }
 
-// What goes on bin/shortcut's stdin for an edit. Unlike create, every field
-// here is sent as it stands in the form -- including empty -- because this is
+// Every field the edit form holds, as bin/shortcut update takes it. Empty
+// fields stay in as null or [] rather than being left out, because this is
 // not a blank the API should default: an edit that clears the sprint or the
-// owner has to say so, not leave the key out and change nothing. The linked
-// PR works the same way -- cleared means cleared -- but only that one entry:
-// whatever else was in otherLinks rides along untouched, so editing a story
-// can never silently drop a doc or a Figma link it already had.
+// owners has to say so. buildUpdatePatch below picks out only the fields that
+// changed; this is the whole picture it compares. The linked PR works the
+// same way -- cleared means cleared -- but only that one entry: whatever else
+// was in otherLinks rides along untouched, so editing a story can never
+// silently drop a doc or a Figma link it already had.
 function buildUpdateRequest(form) {
   var iteration = parseInt(str(form && form.iterationId), 10)
   var pr = trim(form && form.externalLinks && form.externalLinks[0])
@@ -487,6 +488,43 @@ function buildUpdateRequest(form) {
     ownerIds: ownerList(form && form.ownerIds),
     externalLinks: pr !== "" ? others.concat([pr]) : others
   }
+}
+
+// What an edit is compared against when it is saved: the story as the detail
+// view had it when Edit was pressed, in the same shape bin/shortcut reads it
+// back in. Not the form -- the form has already normalized things (the PR
+// link pulled out and canonicalized), and a comparison has to be like for
+// like or every link written a different way reads as someone else's edit.
+function editBase(detail) {
+  var d = detail || {}
+  return {
+    name: d.name === undefined ? null : d.name,
+    description: str(d.description),
+    storyType: d.storyType === undefined ? null : d.storyType,
+    groupId: d.groupId === undefined ? null : d.groupId,
+    iterationId: d.iterationId === undefined ? null : d.iterationId,
+    ownerIds: (d.ownerIds || []).slice(),
+    externalLinks: (d.externalLinks || []).slice()
+  }
+}
+
+// What Save actually sends: only the fields that differ from what the edit
+// opened with, and -- under base -- what each of those looked like then. A
+// field you did not touch is not sent at all, so it cannot overwrite a change
+// someone made to it in Shortcut meanwhile; one you did touch is checked
+// against the story as it is now before it is written.
+function buildUpdatePatch(form, seed, base) {
+  var now = buildUpdateRequest(form)
+  var was = buildUpdateRequest(seed)
+  var patch = {}
+  var then = {}
+  for (var key in now) {
+    if (JSON.stringify(now[key]) === JSON.stringify(was[key])) continue
+    patch[key] = now[key]
+    if (base && key in base) then[key] = base[key]
+  }
+  if (base) patch.base = then
+  return patch
 }
 
 // Save has nothing to do until the edit actually differs from the story it
@@ -1327,7 +1365,8 @@ if (typeof module !== "undefined") {
     settingOptions: settingOptions, resolveTeamSetting: resolveTeamSetting,
     resolveOwnerSetting: resolveOwnerSetting,
     ownerList: ownerList, addOwner: addOwner, removeOwner: removeOwner,
-    ownerChips: ownerChips, ownerAddOptions: ownerAddOptions, resolveIterationSetting: resolveIterationSetting,
+    ownerChips: ownerChips, ownerAddOptions: ownerAddOptions,
+    editBase: editBase, buildUpdatePatch: buildUpdatePatch, resolveIterationSetting: resolveIterationSetting,
     SOLVE_PROMPT_LIMIT: SOLVE_PROMPT_LIMIT,
     solveAgentName: solveAgentName, solveBranch: solveBranch,
     workspaceByLabel: workspaceByLabel, solveTarget: solveTarget,

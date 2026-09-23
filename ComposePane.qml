@@ -69,7 +69,8 @@ Item {
 
   function submit() {
     if (pane.busy || pane.unchanged || !pane.store) return
-    if (pane.editing) pane.store.updateStory(pane.store.editingId, pane.form)
+    if (pane.editing) pane.store.updateStory(pane.store.editingId, pane.form,
+      pane.overlay.editFormSeededWith, pane.overlay.editBase)
     else pane.store.createStory(pane.form)
   }
 

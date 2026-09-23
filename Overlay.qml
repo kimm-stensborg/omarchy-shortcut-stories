@@ -35,6 +35,9 @@ Item {
   // anything to save. Untouched by change() -- only onEditingIdChanged below
   // ever sets it -- so it stays the original even as editForm is replaced.
   property var editFormSeededWith: null
+  // The story itself as it was when the edit opened, for Save to check
+  // Shortcut against -- see Model.editBase.
+  property var editBase: null
   property bool discardArmed: false
 
   // ---- Theme. Read once, so a theme change moves every colour at once.
@@ -228,6 +231,7 @@ Item {
       var seeded = root.store.editingId ? Model.formFromDetail(root.store.detail) : Model.emptyForm()
       root.editForm = seeded
       root.editFormSeededWith = root.store.editingId ? seeded : null
+      root.editBase = root.store.editingId ? Model.editBase(root.store.detail) : null
     }
   }
 
