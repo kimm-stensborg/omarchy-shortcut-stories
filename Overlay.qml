@@ -31,6 +31,10 @@ Item {
   // must not disturb a new story you were halfway through composing, and
   // backing out of one must not leave the other holding stale field values.
   property var editForm: Model.emptyForm()
+  // What the edit form started as, so Save can tell whether there is
+  // anything to save. Untouched by change() -- only onEditingIdChanged below
+  // ever sets it -- so it stays the original even as editForm is replaced.
+  property var editFormSeededWith: null
   property bool discardArmed: false
 
   // ---- Theme. Read once, so a theme change moves every colour at once.
@@ -221,9 +225,9 @@ Item {
     // Clearing it back to empty when the edit ends, rather than leaving the
     // last story's text sitting there, keeps a stray read of it harmless.
     function onEditingIdChanged() {
-      root.editForm = root.store.editingId
-        ? Model.formFromDetail(root.store.detail)
-        : Model.emptyForm()
+      var seeded = root.store.editingId ? Model.formFromDetail(root.store.detail) : Model.emptyForm()
+      root.editForm = seeded
+      root.editFormSeededWith = root.store.editingId ? seeded : null
     }
   }
 

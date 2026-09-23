@@ -248,7 +248,8 @@ cmd_create() {
     jq -cn --slurpfile in <(printf '%s' "$input") '{ok: true, story: {
       id: 9999, name: ($in[0].name | gsub("^\\s+|\\s+$"; "")),
       storyType: ($in[0].storyType // "feature"),
-      appUrl: "https://app.shortcut.com/demo/story/9999"}}'
+      appUrl: "https://app.shortcut.com/demo/story/9999",
+      externalLinks: ($in[0].externalLinks // [])}}'
     return
   fi
 
@@ -270,20 +271,18 @@ cmd_create() {
   local status; status=$(api POST "/stories" "$WORK/created" "$WORK/body.json")
   check_status "$status" "$WORK/created" "Creating the story"
 
-  jq -c '{ok: true, story: {
-    id: .id, name: .name, storyType: .story_type,
-    appUrl: .app_url, workflowStateId: .workflow_state_id,
-    groupId: .group_id, iterationId: .iteration_id,
-    updatedAt: .updated_at}}' "$WORK/created" ||
+  jq -c "{ok: true, story: $story_summary}" "$WORK/created" ||
     fail "Shortcut sent an unreadable story" http
 }
 
-# Same shape as create, minus workflow_state_id and external_links: moving a
-# story between states is the move strip's job, and re-filing its PR link is
-# not something the edit form offers. Iteration and owner go in even when
-# empty, as null and [] -- create leaves an empty field out and lets Shortcut
-# default it, but an edit has to be able to clear a sprint or unassign a story,
-# which leaving the key out cannot do.
+# Same shape as create, minus workflow_state_id: moving a story between
+# states is the move strip's job, not the edit form's. Iteration and owner go
+# in even when empty, as null and [] -- create leaves an empty field out and
+# lets Shortcut default it, but an edit has to be able to clear a sprint or
+# unassign a story, which leaving the key out cannot do. externalLinks is the
+# whole list Shortcut should end up with, not just the one the form shows --
+# the QML side has already folded the edited PR link back in among whatever
+# else the story had, so this never has to know which entry is which.
 cmd_update() {
   local story=${1:-}
   [[ $story =~ ^[0-9]+$ ]] || fail "update needs a story id" usage
@@ -300,6 +299,7 @@ cmd_update() {
       groupId: ($in[0].groupId // ""),
       iterationId: $in[0].iterationId,
       ownerIds: (if ($in[0].ownerId // null) != null then [$in[0].ownerId] else [] end),
+      externalLinks: ($in[0].externalLinks // []),
       updatedAt: "2026-09-22T12:00:00Z"}}'
     return
   fi
@@ -311,6 +311,8 @@ cmd_update() {
     + (if (.groupId // "") != "" then {group_id: .groupId} else {} end)
     + {iteration_id: (.iterationId // null)}
     + {owner_ids: (if (.ownerId // null) != null then [.ownerId] else [] end)}
+    + {external_links: ([.externalLinks[]? | select(type == "string")
+         | gsub("^\\s+|\\s+$"; "") | select(length > 0)])}
   ' <<<"$input" >"$WORK/body.json" || fail "update could not build a story" usage
 
   load_token
@@ -372,7 +374,8 @@ story_summary='{
   id: .id, name: .name, storyType: .story_type,
   appUrl: .app_url, workflowStateId: .workflow_state_id,
   groupId: .group_id, iterationId: .iteration_id,
-  ownerIds: (.owner_ids // []), updatedAt: .updated_at
+  ownerIds: (.owner_ids // []), externalLinks: (.external_links // []),
+  updatedAt: .updated_at
 }'
 
 # The structured query endpoint, not the search-operator one: it takes your
@@ -388,9 +391,11 @@ cmd_mine() {
   if [[ -n ${SHORTCUT_DEMO:-} ]]; then
     jq -cn --argjson now "$(now)" '{ok: true, fetchedAt: $now, total: 2, stories: [
       {id: 1234, name: "Fix the thing", storyType: "bug", appUrl: "https://app.shortcut.com/demo/story/1234",
-       workflowStateId: 5003, groupId: "demo-team-1", iterationId: 42, ownerIds: ["demo-me"], updatedAt: "2026-09-21T09:00:00Z"},
+       workflowStateId: 5003, groupId: "demo-team-1", iterationId: 42, ownerIds: ["demo-me"],
+       externalLinks: ["https://github.com/acme/app/pull/7"], updatedAt: "2026-09-21T09:00:00Z"},
       {id: 1235, name: "Write the other thing", storyType: "feature", appUrl: "https://app.shortcut.com/demo/story/1235",
-       workflowStateId: 5002, groupId: "demo-team-1", iterationId: 42, ownerIds: ["demo-me"], updatedAt: "2026-09-20T15:30:00Z"}]}'
+       workflowStateId: 5002, groupId: "demo-team-1", iterationId: 42, ownerIds: ["demo-me"],
+       externalLinks: [], updatedAt: "2026-09-20T15:30:00Z"}]}'
     return
   fi
 
@@ -431,6 +436,7 @@ cmd_show() {
       epicId: null, estimate: 2, deadline: null,
       ownerIds: ["demo-me"], requestedById: "demo-ada",
       labels: ["regression", "frontend"],
+      externalLinks: ["https://github.com/acme/app/pull/7", "https://figma.com/file/xyz"],
       tasks: [{id: 1, description: "Reproduce it", complete: true},
               {id: 2, description: "Write a test", complete: false}],
       comments: [
@@ -458,6 +464,7 @@ cmd_show() {
       estimate: .estimate, deadline: .deadline,
       ownerIds: (.owner_ids // []), requestedById: .requested_by_id,
       labels: ((.labels // []) | map(.name)),
+      externalLinks: (.external_links // []),
       tasks: ((.tasks // []) | sort_by(.position)
         | map({id: .id, description: .description, complete: .complete})),
       comments: ($comments | sort_by([.position // 0, .created_at // ""])

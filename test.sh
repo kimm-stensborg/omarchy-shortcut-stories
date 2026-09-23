@@ -94,7 +94,8 @@ cat >"$WORK/routes.json" <<'JSON'
   "POST /api/v3/stories/search": [200, [
     {"id": 1234, "name": "Older story", "story_type": "bug", "app_url": "u1",
      "workflow_state_id": 5003, "group_id": "g1", "iteration_id": 42,
-     "owner_ids": ["me-uuid"], "updated_at": "2026-09-20T10:00:00Z"},
+     "owner_ids": ["me-uuid"], "external_links": ["https://github.com/acme/app/pull/9"],
+     "updated_at": "2026-09-20T10:00:00Z"},
     {"id": 1235, "name": "Newer story", "story_type": "feature", "app_url": "u2",
      "workflow_state_id": 5002, "group_id": "g1", "iteration_id": 42,
      "owner_ids": ["me-uuid"], "updated_at": "2026-09-21T10:00:00Z"}
@@ -104,6 +105,7 @@ cat >"$WORK/routes.json" <<'JSON'
     "workflow_state_id": 5003, "group_id": "g1", "iteration_id": 42, "epic_id": null,
     "estimate": 2, "deadline": null, "owner_ids": ["me-uuid"], "requested_by_id": "ada-uuid",
     "labels": [{"id": 1, "name": "regression"}, {"id": 2, "name": "frontend"}],
+    "external_links": ["https://figma.com/file/xyz", "https://github.com/acme/app/pull/9"],
     "tasks": [{"id": 2, "description": "Second", "complete": false, "position": 1},
               {"id": 1, "description": "First", "complete": true, "position": 0}],
     "comments": [
@@ -236,11 +238,15 @@ is "the iteration is a number"   "$(jq -r '.iteration_id | type' <<<"$body")" "n
 is "one owner becomes a list"    "$(jq -c .owner_ids <<<"$body")" '["ada-uuid"]'
 
 reset_log
+route "POST /api/v3/stories" '[201, {"id": 1234, "name": "From a PR", "story_type": "feature", "app_url": "https://app.shortcut.com/acme/story/1234", "workflow_state_id": 5002, "group_id": "g1", "iteration_id": 42, "external_links": ["https://github.com/acme/app/pull/42"], "updated_at": "2026-09-22T10:00:00Z"}]'
 out=$(printf '%s' '{"name":"From a PR","externalLinks":["https://github.com/acme/app/pull/42","  "]}' | s create)
 body=$(log | sed -n 's/.*body=//p' | tail -1)
 is "a PR link is filed"          "$(jq -r .ok <<<"$out")" "true"
 is "as Shortcut's external_links" "$(jq -c .external_links <<<"$body")" '["https://github.com/acme/app/pull/42"]'
 hasnt "blank links are dropped"  "$(jq -c .external_links <<<"$body")" '""'
+is "and the link comes back, so the new row can show its icon right away" \
+  "$(jq -c .story.externalLinks <<<"$out")" '["https://github.com/acme/app/pull/42"]'
+route "POST /api/v3/stories" '[201, {"id": 1234, "name": "Fix the thing", "story_type": "bug", "app_url": "https://app.shortcut.com/acme/story/1234", "workflow_state_id": 5002, "group_id": "g1", "iteration_id": 42, "updated_at": "2026-09-22T10:00:00Z"}]'
 
 reset_log
 printf '%s' '{"name":"Whitelisted","bogusKey":"dropped","archived":true}' | s create >/dev/null
@@ -317,6 +323,8 @@ out=$(s mine)
 is "mine succeeds"            "$(jq -r .ok <<<"$out")" "true"
 is "it counts what it found"  "$(jq -r .total <<<"$out")" "2"
 is "newest first"             "$(jq -r '[.stories[].name] | join(",")' <<<"$out")" "Newer story,Older story"
+is "a linked PR rides along"  "$(jq -c '.stories[] | select(.id == 1234) | .externalLinks' <<<"$out")" '["https://github.com/acme/app/pull/9"]'
+is "no link means an empty list, not missing" "$(jq -c '.stories[] | select(.id == 1235) | .externalLinks' <<<"$out")" '[]'
 body=$(log | sed -n 's/.*body=//p' | tail -1)
 is "it asks by owner id"      "$(jq -r .owner_id <<<"$body")" "me-uuid"
 is "and by open state types"  "$(jq -c .workflow_state_types <<<"$body")" '["backlog","unstarted","started"]'
@@ -357,6 +365,7 @@ is "the type is renamed"          "$(jq -r .story_type <<<"$body")" "chore"
 is "the team is renamed"          "$(jq -r .group_id <<<"$body")" "g2"
 is "the iteration is a number"    "$(jq -r '.iteration_id | type' <<<"$body")" "number"
 is "one owner becomes a list"     "$(jq -c .owner_ids <<<"$body")" '["ada-uuid"]'
+is "no PR link means an empty list" "$(jq -c .external_links <<<"$body")" "[]"
 hasnt "the state is never touched" "$body" "workflow_state_id"
 
 reset_log
@@ -366,6 +375,19 @@ is "clearing succeeds"               "$(jq -r .ok <<<"$out")" "true"
 hasnt "an empty team is left out"    "$body" "group_id"
 is "a cleared iteration is null"     "$(jq -r .iteration_id <<<"$body")" "null"
 is "a cleared owner is an empty list" "$(jq -c .owner_ids <<<"$body")" "[]"
+
+reset_log
+route "PUT /api/v3/stories/1234" '[200, {"id": 1234, "name": "Fix the thing", "story_type": "bug", "app_url": "https://app.shortcut.com/acme/story/1234", "workflow_state_id": 5004, "group_id": "g1", "iteration_id": 42, "owner_ids": ["me-uuid"], "external_links": ["https://figma.com/file/xyz", "https://github.com/acme/app/pull/9"], "updated_at": "2026-09-22T11:00:00Z"}]'
+out=$(printf '%s' '{"name":"Linked","externalLinks":["https://figma.com/file/xyz","https://github.com/acme/app/pull/9"]}' | s update 1234)
+body=$(log | sed -n 's/.*body=//p' | tail -1)
+is "linking succeeds"        "$(jq -r .ok <<<"$out")" "true"
+is "both links go out"       "$(jq -c .external_links <<<"$body")" '["https://figma.com/file/xyz","https://github.com/acme/app/pull/9"]'
+is "and both come back"      "$(jq -c .story.externalLinks <<<"$out")" '["https://figma.com/file/xyz","https://github.com/acme/app/pull/9"]'
+out=$(printf '%s' '{"name":"Messy","externalLinks":["  ","https://github.com/acme/app/pull/9  "]}' | s update 1234)
+body=$(log | sed -n 's/.*body=//p' | tail -1)
+is "a blank link is dropped, an untrimmed one is trimmed" \
+  "$(jq -c .external_links <<<"$body")" '["https://github.com/acme/app/pull/9"]'
+route "PUT /api/v3/stories/1234" '[200, {"id": 1234, "name": "Fix the thing", "story_type": "bug", "app_url": "https://app.shortcut.com/acme/story/1234", "workflow_state_id": 5004, "group_id": "g1", "iteration_id": 42, "owner_ids": ["me-uuid"], "description": "Updated body", "updated_at": "2026-09-22T11:00:00Z"}]'
 
 reset_log
 out=$(printf '%s' '{"name":"x"}' | s update abc)
@@ -389,6 +411,7 @@ reset_log
 out=$(s show 1234)
 is "show succeeds"           "$(jq -r .ok <<<"$out")" "true"
 is "it brings the description" "$(jq -r .story.description <<<"$out")" "Body **text**"
+is "and its external links"  "$(jq -c .story.externalLinks <<<"$out")" '["https://figma.com/file/xyz","https://github.com/acme/app/pull/9"]'
 is "labels come back by name" "$(jq -c .story.labels <<<"$out")" '["regression","frontend"]'
 is "tasks are in order"      "$(jq -r '[.story.tasks[].description] | join(",")' <<<"$out")" "First,Second"
 is "comments are oldest first" "$(jq -r '[.story.comments[].text] | join(",")' <<<"$out")" "Seen it too,On it"
@@ -764,6 +787,38 @@ const cases = [
     M.buildUpdateRequest({name: "x", ownerId: "me-uuid"}).ownerId, "me-uuid"],
   ["a cleared owner is null, not left out",
     M.buildUpdateRequest({name: "x", ownerId: ""}).ownerId, null],
+  ["the linked PR rides along with whatever else the story had",
+    JSON.stringify(M.buildUpdateRequest({name: "x",
+      externalLinks: ["https://github.com/a/b/pull/9"], otherLinks: ["https://figma.com/f/x"]}).externalLinks),
+    '["https://figma.com/f/x","https://github.com/a/b/pull/9"]'],
+  ["a cleared PR link leaves everything else",
+    JSON.stringify(M.buildUpdateRequest({name: "x",
+      externalLinks: [], otherLinks: ["https://figma.com/f/x"]}).externalLinks),
+    '["https://figma.com/f/x"]'],
+  ["a typed PR link is canonicalised",
+    M.buildUpdateRequest({name: "x", externalLinks: ["https://github.com/a/b/pull/9/files"]}).externalLinks[0],
+    "https://github.com/a/b/pull/9"],
+  ["something that is not a PR link is sent as typed",
+    M.buildUpdateRequest({name: "x", externalLinks: ["https://example.com/x"]}).externalLinks[0],
+    "https://example.com/x"],
+
+  // Save has nothing to do until the edit differs
+  ["an untouched form is not dirty",
+    M.editFormDirty({name: "x", storyType: "bug"}, {name: "x", storyType: "bug"}), false],
+  ["a changed name is dirty",
+    M.editFormDirty({name: "y"}, {name: "x"}), true],
+  ["trailing whitespace alone is not dirty -- saving it would not change it",
+    M.editFormDirty({name: "x", description: "body  "}, {name: "x", description: "body"}), false],
+  ["a PR link written differently is not dirty once canonicalised",
+    M.editFormDirty(
+      {name: "x", externalLinks: ["https://github.com/a/b/pull/9/files"]},
+      {name: "x", externalLinks: ["https://github.com/a/b/pull/9"]}), false],
+  ["a real PR link change is dirty",
+    M.editFormDirty(
+      {name: "x", externalLinks: ["https://github.com/a/b/pull/9"]},
+      {name: "x", externalLinks: ["https://github.com/a/b/pull/1"]}), true],
+  ["no seed means nothing to compare, so not dirty",
+    M.editFormDirty({name: "x"}, null), false],
 
   // a story handed back to the form it came from
   ["the name comes back",
@@ -778,8 +833,17 @@ const cases = [
     M.formFromDetail({iterationId: 42}).iterationId, "42"],
   ["no iteration is an empty string, not \"null\"",
     M.formFromDetail({iterationId: null}).iterationId, ""],
-  ["a PR link never comes back -- retitling from one is not offered here",
+  ["no external links means nothing to edit",
     M.formFromDetail({name: "x"}).externalLinks.length, 0],
+  ["a PR-shaped link becomes the editable slot",
+    M.formFromDetail({externalLinks: ["https://figma.com/f/x", "https://github.com/a/b/pull/9"]}).externalLinks[0],
+    "https://github.com/a/b/pull/9"],
+  ["every other link is set aside, not shown",
+    JSON.stringify(M.formFromDetail({externalLinks: ["https://figma.com/f/x", "https://github.com/a/b/pull/9"]}).otherLinks),
+    '["https://figma.com/f/x"]'],
+  ["only the first PR-shaped link is ever the editable one",
+    M.formFromDetail({externalLinks: ["https://github.com/a/b/pull/1", "https://github.com/a/b/pull/2"]}).otherLinks.length,
+    1],
 
   // GitHub pull requests
   ["a PR URL is recognised",
@@ -811,6 +875,10 @@ const cases = [
   ["the source label is short",
     M.prSourceLabel({externalLinks: ["https://github.com/acme/app/pull/42"]}),
     "acme/app#42"],
+  ["a ref label is short too",  M.prRefLabel("https://github.com/acme/app/pull/42"), "acme/app#42"],
+  ["a ref label on something else is the trimmed url",
+    M.prRefLabel("  https://example.com/x  "), "https://example.com/x"],
+  ["a ref label on nothing is nothing", M.prRefLabel(""), ""],
 
   // the draft
   ["a fresh form is clean",    M.draftIsDirty(M.emptyForm()), false],
@@ -834,6 +902,17 @@ const cases = [
   ["an unknown state reads Unknown", M.summarizeStory({id: 1, workflowStateId: 9}, refs).stateName, "Unknown"],
   ["a team name is resolved",  M.summarizeStory({id: 1, groupId: "g1"}, refs).groupName, "Platform"],
   ["an iteration name too",    M.summarizeStory({id: 1, iterationId: 42}, refs).iterationName, "Sprint 12"],
+  ["a linked PR is picked out for the row icon",
+    M.summarizeStory({id: 1, externalLinks: ["https://figma.com/f/x", "https://github.com/a/b/pull/9"]}, refs).prUrl,
+    "https://github.com/a/b/pull/9"],
+  ["no PR-shaped link means no icon",
+    M.summarizeStory({id: 1, externalLinks: ["https://figma.com/f/x"]}, refs).prUrl, ""],
+  ["no links at all means no icon",
+    M.summarizeStory({id: 1}, refs).prUrl, ""],
+  ["firstPrLink finds the first among several",
+    M.firstPrLink(["https://figma.com/f/x", "https://github.com/a/b/pull/1", "https://github.com/a/b/pull/2"]),
+    "https://github.com/a/b/pull/1"],
+  ["firstPrLink on nothing is nothing", M.firstPrLink(undefined), ""],
 ]
 
 const stories = [

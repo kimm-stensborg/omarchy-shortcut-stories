@@ -273,7 +273,12 @@ function emptyForm(defaults) {
     ownerId: str(d.ownerId),
     // A GitHub pull request the story was filled from. Filed as Shortcut's
     // external_links so the PR stays on the story after the title is rewritten.
-    externalLinks: []
+    externalLinks: [],
+    // Every other external link an existing story already carries -- a doc, a
+    // Figma file, anything not shaped like a GitHub PR. The edit form never
+    // shows these, but it has to round-trip them, or saving a story that has
+    // one would silently drop it.
+    otherLinks: []
   }
 }
 
@@ -295,14 +300,28 @@ function parseGithubPrUrl(text) {
   }
 }
 
-// owner/repo#42 for the line under the form. A bare URL that is not a GitHub
-// PR still shows, rather than vanishing into an empty string.
+// The first of a story's external links shaped like a GitHub PR, or "" for
+// none. Used both for the row icon in the list and to seed the edit form's
+// one editable slot.
+function firstPrLink(links) {
+  var list = links || []
+  for (var i = 0; i < list.length; i++) if (parseGithubPrUrl(list[i])) return list[i]
+  return ""
+}
+
+// owner/repo#42 for one PR link. A URL that is not a GitHub PR still shows,
+// trimmed, rather than vanishing into an empty string.
+function prRefLabel(url) {
+  var u = trim(url)
+  if (u === "") return ""
+  var parsed = parseGithubPrUrl(u)
+  return parsed ? parsed.owner + "/" + parsed.repo + "#" + parsed.number : u
+}
+
+// Same, read off the compose form's one PR slot.
 function prSourceLabel(form) {
   var links = (form && form.externalLinks) || []
-  if (!links.length) return ""
-  var parsed = parseGithubPrUrl(links[0])
-  if (parsed) return parsed.owner + "/" + parsed.repo + "#" + parsed.number
-  return trim(links[0])
+  return links.length ? prRefLabel(links[0]) : ""
 }
 
 // Turn a looked-up pull request into the form: the PR's title and body become
@@ -377,8 +396,17 @@ function buildCreateRequest(form, refs) {
 
 // A story already on Shortcut, turned back into the same shape the compose
 // form edits. Only the fields the form offers come back — labels, tasks,
-// comments and the rest stay on the story, untouched by an edit.
+// comments and the rest stay on the story, untouched by an edit. The one
+// external link shaped like a GitHub PR becomes the editable slot; every
+// other one is set aside in otherLinks, unedited but not lost.
 function formFromDetail(raw) {
+  var links = (raw && raw.externalLinks) || []
+  var pr = null
+  var others = []
+  for (var i = 0; i < links.length; i++) {
+    if (pr === null && parseGithubPrUrl(links[i])) pr = links[i]
+    else others.push(links[i])
+  }
   return {
     name: str(raw && raw.name),
     description: str(raw && raw.description),
@@ -387,25 +415,47 @@ function formFromDetail(raw) {
     iterationId: raw && raw.iterationId !== null && raw.iterationId !== undefined
       ? str(raw.iterationId) : "",
     ownerId: (raw && raw.ownerIds && raw.ownerIds.length) ? str(raw.ownerIds[0]) : "",
-    externalLinks: []
+    externalLinks: pr ? [pr] : [],
+    otherLinks: others
   }
 }
 
 // What goes on bin/shortcut's stdin for an edit. Unlike create, every field
 // here is sent as it stands in the form -- including empty -- because this is
 // not a blank the API should default: an edit that clears the sprint or the
-// owner has to say so, not leave the key out and change nothing.
+// owner has to say so, not leave the key out and change nothing. The linked
+// PR works the same way -- cleared means cleared -- but only that one entry:
+// whatever else was in otherLinks rides along untouched, so editing a story
+// can never silently drop a doc or a Figma link it already had.
 function buildUpdateRequest(form) {
   var iteration = parseInt(str(form && form.iterationId), 10)
   var owner = str(form && form.ownerId)
+  var pr = trim(form && form.externalLinks && form.externalLinks[0])
+  if (pr !== "") {
+    var parsed = parseGithubPrUrl(pr)
+    if (parsed) pr = parsed.url
+  }
+  var others = ((form && form.otherLinks) || []).map(trim).filter(function(u) { return u !== "" })
   return {
     name: trim(form && form.name),
     description: str(form && form.description).replace(/\s+$/, ""),
     storyType: str(form && form.storyType) || "feature",
     groupId: str(form && form.groupId),
     iterationId: isFinite(iteration) ? iteration : null,
-    ownerId: owner !== "" ? owner : null
+    ownerId: owner !== "" ? owner : null,
+    externalLinks: pr !== "" ? others.concat([pr]) : others
   }
+}
+
+// Save has nothing to do until the edit actually differs from the story it
+// was seeded from. Comparing the two built requests, rather than the two
+// forms field by field, means anything buildUpdateRequest itself normalizes
+// away -- trimmed whitespace, a PR link written a different way -- does not
+// read as a change either, and a field added there later is covered here for
+// free.
+function editFormDirty(form, seed) {
+  if (!form || !seed) return false
+  return JSON.stringify(buildUpdateRequest(form)) !== JSON.stringify(buildUpdateRequest(seed))
 }
 
 // Is there anything here worth a second Esc before it is thrown away?
@@ -464,6 +514,7 @@ function summarizeStory(story, refs) {
     statePosition: found ? (found.state.position || 0) : 0,
     groupName: group ? str(group.name) : "",
     iterationName: iteration ? str(iteration.name) : "",
+    prUrl: firstPrLink(story && story.externalLinks),
     updatedAt: str(story && story.updatedAt)
   }
 }
@@ -1207,10 +1258,12 @@ if (typeof module !== "undefined") {
     storyTypes: storyTypes, storyGlyph: storyGlyph,
     formatDescription: formatDescription,
     emptyForm: emptyForm, validateForm: validateForm,
-    parseGithubPrUrl: parseGithubPrUrl, prSourceLabel: prSourceLabel,
+    parseGithubPrUrl: parseGithubPrUrl, prSourceLabel: prSourceLabel, firstPrLink: firstPrLink,
+    prRefLabel: prRefLabel,
     applyPrToForm: applyPrToForm,
     buildCreateRequest: buildCreateRequest, draftIsDirty: draftIsDirty,
     formFromDetail: formFromDetail, buildUpdateRequest: buildUpdateRequest,
+    editFormDirty: editFormDirty,
     clearForm: clearForm, destinationLabel: destinationLabel,
     summarizeStory: summarizeStory, storyComments: storyComments,
     storyDetail: storyDetail,

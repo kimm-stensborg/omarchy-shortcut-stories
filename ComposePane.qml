@@ -23,6 +23,10 @@ Item {
   readonly property bool hasRefs: pane.overlay ? pane.overlay.hasRefs : false
   readonly property bool busy: pane.store
     ? (pane.editing ? pane.store.updating : (pane.store.creating || pane.store.loadingPr)) : false
+  // Nothing for Save to do until the edit differs from the story it opened
+  // with. Always false outside editing -- Create has no "unchanged" to guard.
+  readonly property bool unchanged: pane.editing
+    && !Model.editFormDirty(pane.form, pane.overlay ? pane.overlay.editFormSeededWith : null)
   readonly property string prLabel: Model.prSourceLabel(pane.form)
 
   readonly property color foreground: pane.overlay ? pane.overlay.foreground : Color.menu.text
@@ -63,7 +67,7 @@ Item {
   }
 
   function submit() {
-    if (pane.busy || !pane.store) return
+    if (pane.busy || pane.unchanged || !pane.store) return
     if (pane.editing) pane.store.updateStory(pane.store.editingId, pane.form)
     else pane.store.createStory(pane.form)
   }
@@ -252,6 +256,53 @@ Item {
       }
     }
 
+    // ---- Linked PR. Edit only: create already links a story from a pasted
+    // PR title (see the prLookup timer above), and retitling an existing
+    // story from a paste is not something this form offers, so this is the
+    // one place attaching, changing or clearing the link lives. Any other
+    // external link the story already had (a doc, a Figma file) rides along
+    // untouched -- see Model.formFromDetail and buildUpdateRequest.
+    RowLayout {
+      Layout.fillWidth: true
+      visible: pane.editing
+      spacing: Style.spacing.controlGap
+
+      Text {
+        text: "Linked PR"
+        color: pane.muted
+        font.family: pane.fontFamily
+        font.pixelSize: Style.font.caption
+        Layout.preferredWidth: Style.space(90)
+      }
+
+      TextField {
+        id: prField
+        Layout.fillWidth: true
+        text: (pane.form.externalLinks && pane.form.externalLinks[0]) || ""
+        placeholderText: "https://github.com/owner/repo/pull/123"
+        foreground: pane.foreground
+        accent: pane.accent
+        font.family: pane.fontFamily
+        font.pixelSize: Style.font.body
+        onTextChanged: pane.change("externalLinks", text.trim() === "" ? [] : [text])
+        Keys.onPressed: function(event) {
+          if (event.key === Qt.Key_Tab) { pane.step(prField, 1); event.accepted = true }
+          else if (event.key === Qt.Key_Backtab) { pane.step(prField, -1); event.accepted = true }
+        }
+      }
+    }
+
+    Text {
+      Layout.fillWidth: true
+      visible: pane.editing && !!(pane.form.externalLinks && pane.form.externalLinks[0])
+      elide: Text.ElideRight
+      color: pane.muted
+      font.family: pane.fontFamily
+      font.pixelSize: Style.font.caption
+      text: pane.prLabel !== "" ? "Linked to " + pane.prLabel
+                                : "Not recognized as a GitHub pull request link"
+    }
+
     // ---- Description.
     QQC.ScrollView {
       Layout.fillWidth: true
@@ -307,7 +358,9 @@ Item {
 
         Text {
           Layout.fillWidth: true
-          visible: pane.prLabel !== "" || !!(pane.store && pane.store.loadingPr)
+          // The edit form has its own line, right under the Linked PR field --
+          // this one is about a title just pasted in, which editing never does.
+          visible: !pane.editing && (pane.prLabel !== "" || !!(pane.store && pane.store.loadingPr))
           elide: Text.ElideRight
           color: pane.muted
           font.family: pane.fontFamily
@@ -319,13 +372,25 @@ Item {
       }
 
       Button {
+        visible: pane.editing
         bordered: true
+        // Mid-save, Cancel would read as "discard this" while the write is
+        // already on its way -- same reasoning as disabling Save itself.
         enabled: !pane.busy
+        text: "Cancel"
+        foreground: pane.muted
+        fontFamily: pane.fontFamily
+        onClicked: if (pane.store) pane.store.cancelEdit()
+      }
+
+      Button {
+        bordered: true
+        enabled: !pane.busy && !pane.unchanged
         text: pane.editing
           ? (pane.store && pane.store.updating ? "Saving..." : "Save changes")
           : (pane.store && pane.store.loadingPr ? "Reading…"
             : (pane.store && pane.store.creating ? "Filing..." : "Create story"))
-        foreground: pane.busy ? pane.muted : pane.accent
+        foreground: (pane.busy || pane.unchanged) ? pane.muted : pane.accent
         fontFamily: pane.fontFamily
         onClicked: pane.submit()
       }

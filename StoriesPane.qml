@@ -260,6 +260,16 @@ Item {
             font.pixelSize: Style.font.body
           }
 
+          Button {
+            visible: row.story.prUrl !== ""
+            bordered: false
+            text: ""
+            tooltipText: "Open the linked pull request"
+            foreground: pane.muted
+            fontFamily: pane.fontFamily
+            onClicked: Quickshell.execDetached(["omarchy-launch-browser", row.story.prUrl])
+          }
+
           Text {
             text: row.busy ? "moving..." : row.story.stateName
             color: row.busy ? pane.accent : pane.muted

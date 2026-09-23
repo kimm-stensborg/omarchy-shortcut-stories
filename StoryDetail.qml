@@ -86,6 +86,17 @@ Item {
     if (view.store && view.detail) view.store.beginEdit(view.detail.id)
   }
 
+  // wl-copy, not the Overlay-owned form: this is a read, not a draft, and it
+  // has to work with nothing open to edit.
+  property bool prCopied: false
+  function copyPrLink() {
+    if (!view.detail || !view.detail.prUrl) return
+    Quickshell.execDetached(["bash", "-c", "printf %s " + Util.shellQuote(view.detail.prUrl) + " | wl-copy"])
+    view.prCopied = true
+    prCopiedTimer.restart()
+  }
+  Timer { id: prCopiedTimer; interval: 1500; onTriggered: view.prCopied = false }
+
   Item {
     id: keys
     anchors.fill: parent
@@ -184,6 +195,20 @@ Item {
           fontFamily: view.fontFamily
           onClicked: if (view.store) view.store.armSolve()
         }
+      }
+
+      // ---- The linked PR, if there is one. A click copies the URL rather
+      // than opening it -- Open above already does that for the story, and a
+      // PR link is usually wanted to paste somewhere else, not to visit.
+      Button {
+        visible: !!(view.detail && view.detail.prUrl)
+        bordered: false
+        iconText: ""
+        text: view.detail ? Model.prRefLabel(view.detail.prUrl) : ""
+        tooltipText: view.prCopied ? "Copied!" : "Copy the pull request link"
+        foreground: view.muted
+        fontFamily: view.fontFamily
+        onClicked: view.copyPrLink()
       }
 
       Text {
