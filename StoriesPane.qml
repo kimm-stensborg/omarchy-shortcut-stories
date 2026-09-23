@@ -252,6 +252,7 @@ Item {
           }
 
           Text {
+            id: nameText
             Layout.fillWidth: true
             elide: Text.ElideRight
             text: row.story.name
@@ -260,8 +261,13 @@ Item {
             font.pixelSize: Style.font.body
           }
 
+          // No padding of its own and the title's height, so a row with a PR
+          // is exactly as tall as one without: the list does not step.
           Button {
             visible: row.story.prUrl !== ""
+            Layout.preferredHeight: nameText.implicitHeight
+            horizontalPadding: Style.space(2)
+            verticalPadding: 0
             bordered: false
             text: ""
             tooltipText: "Open the linked pull request"

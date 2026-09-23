@@ -19,6 +19,7 @@ Item {
   readonly property color foreground: pane.overlay ? pane.overlay.foreground : Color.menu.text
   readonly property color muted: pane.overlay ? pane.overlay.muted : Color.muted
   readonly property color accent: pane.overlay ? pane.overlay.accent : Color.accent
+  readonly property color background: pane.overlay ? pane.overlay.background : Color.menu.background
   readonly property string fontFamily: pane.overlay ? pane.overlay.fontFamily : Style.font.menuFamily
 
   property bool editing: false
@@ -76,46 +77,69 @@ Item {
         Layout.fillHeight: true
         clip: true
         contentWidth: width
-        contentHeight: pageRow.implicitHeight
+        contentHeight: pageColumn.implicitHeight
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
 
-        Row {
-          id: pageRow
+        Column {
+          id: pageColumn
           width: settingsFlick.width
-          spacing: Style.spacing.lg
+          spacing: Style.spacing.md
 
-          Repeater {
-            model: 2
+          Row {
+            id: pageRow
+            width: settingsFlick.width
+            spacing: Style.spacing.lg
 
-            SettingsColumn {
-              required property int index
-              width: (pageRow.width - pageRow.spacing) / 2
-              sections: pane.pageColumns[index]
-              values: pane.settings
-              refs: pane.overlay ? pane.overlay.refs : null
-              workspaces: pane.store ? pane.store.workspaces : null
-              today: new Date().toISOString().slice(0, 10)
-              fg: pane.foreground
-              muted: pane.muted
-              accent: pane.accent
-              fontFamily: pane.fontFamily
-              onChanged: function(key, value) { if (pane.store) pane.store.persist(key, value) }
-              onEditingChanged: pane.editing = editing
-              onFocusReleased: keys.forceActiveFocus()
+            Repeater {
+              model: 2
+
+              SettingsColumn {
+                required property int index
+                width: (pageRow.width - pageRow.spacing) / 2
+                sections: pane.pageColumns[index]
+                values: pane.settings
+                refs: pane.overlay ? pane.overlay.refs : null
+                workspaces: pane.store ? pane.store.workspaces : null
+                today: new Date().toISOString().slice(0, 10)
+                fg: pane.foreground
+                muted: pane.muted
+                accent: pane.accent
+                fontFamily: pane.fontFamily
+                onChanged: function(key, value) { if (pane.store) pane.store.persist(key, value) }
+                onEditingChanged: pane.editing = editing
+                onFocusReleased: keys.forceActiveFocus()
+              }
             }
           }
-        }
-      }
 
-      Text {
-        Layout.fillWidth: true
-        wrapMode: Text.WordWrap
-        color: pane.muted
-        font.family: pane.fontFamily
-        font.pixelSize: Style.font.caption
-        text: "A dot marks an option that is no longer the default. "
-            + "The token is not here: it lives in your keyring, set with bin/shortcut login."
+          // At the end of the page rather than pinned under it: a fixed line
+          // there took the room the last card needed and cut it off.
+          Text {
+            width: settingsFlick.width
+            wrapMode: Text.WordWrap
+            color: pane.muted
+            font.family: pane.fontFamily
+            font.pixelSize: Style.font.caption
+            text: "A dot marks an option that is no longer the default. "
+                + "The token is not here: it lives in your keyring, set with bin/shortcut login."
+          }
+        }
+
+        // More below: the page fades out rather than stopping at a card cut
+        // in half, which read as broken rather than as "scroll".
+        Rectangle {
+          parent: settingsFlick
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.bottom: parent.bottom
+          height: Style.space(40)
+          visible: settingsFlick.contentY < settingsFlick.contentHeight - settingsFlick.height - 1
+          gradient: Gradient {
+            GradientStop { position: 0.0; color: Qt.rgba(pane.background.r, pane.background.g, pane.background.b, 0) }
+            GradientStop { position: 1.0; color: pane.background }
+          }
+        }
       }
     }
   }

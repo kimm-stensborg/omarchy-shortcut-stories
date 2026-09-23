@@ -70,6 +70,7 @@ Item {
   readonly property color muted: view.overlay ? view.overlay.muted : Color.muted
   readonly property color accent: view.overlay ? view.overlay.accent : Color.accent
   readonly property color urgent: view.overlay ? view.overlay.urgent : Color.urgent
+  readonly property color background: view.overlay ? view.overlay.background : Color.menu.background
   readonly property string fontFamily: view.overlay ? view.overlay.fontFamily : Style.font.menuFamily
 
   // Keep the state the arrows are on inside the one-row strip. A wrapped grid
@@ -243,8 +244,11 @@ Item {
       RowLayout {
         Layout.fillWidth: true
         visible: view.prUrl !== ""
-        spacing: Style.spacing.sm
+        spacing: Style.spacing.lg
 
+        // Caption size and no padding of its own, so it lines up with the
+        // agent line under it and the status text beside it; still a button
+        // for the hover and the click.
         Button {
           bordered: false
           iconText: ""
@@ -252,6 +256,10 @@ Item {
           tooltipText: view.prCopied ? "Copied!" : "Copy the pull request link"
           foreground: view.muted
           fontFamily: view.fontFamily
+          fontSize: Style.font.caption
+          iconSize: Style.font.caption
+          horizontalPadding: 0
+          verticalPadding: 0
           onClicked: view.copyPrLink()
         }
 
@@ -578,6 +586,38 @@ Item {
                 onXChanged: if (picked) Qt.callLater(function() { view.revealState(chip) })
                 Component.onCompleted: if (picked) Qt.callLater(function() { view.revealState(chip) })
               }
+            }
+          }
+
+          // The strip scrolls to keep the state you are on in view, so a
+          // chip at either edge can be cut in half -- "cklog" for Backlog.
+          // Fading out whichever side has more to it says "there is more
+          // this way" instead of reading as broken text.
+          Rectangle {
+            parent: stateScroll
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            width: Style.space(32)
+            visible: stateScroll.contentX > 1
+            gradient: Gradient {
+              orientation: Gradient.Horizontal
+              GradientStop { position: 0.0; color: view.background }
+              GradientStop { position: 1.0; color: Qt.rgba(view.background.r, view.background.g, view.background.b, 0) }
+            }
+          }
+
+          Rectangle {
+            parent: stateScroll
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            width: Style.space(32)
+            visible: stateScroll.contentX < stateScroll.contentWidth - stateScroll.width - 1
+            gradient: Gradient {
+              orientation: Gradient.Horizontal
+              GradientStop { position: 0.0; color: Qt.rgba(view.background.r, view.background.g, view.background.b, 0) }
+              GradientStop { position: 1.0; color: view.background }
             }
           }
         }
