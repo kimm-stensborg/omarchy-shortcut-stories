@@ -1464,6 +1464,62 @@ function noticeText(text) {
   return str(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 }
 
+// ---- Where the panel stands.
+// A place is the card's top-left corner on its screen, in the screen's own
+// logical pixels. No place means the middle. Places are kept per screen, by
+// Hyprland's name for it, and are clamped whenever they are used rather than
+// when they are stored: a screen can change size underneath one.
+
+function clampPlace(place, screenW, screenH, cardW, cardH) {
+  var maxX = Math.max(0, screenW - cardW)
+  var maxY = Math.max(0, screenH - cardH)
+  if (!place || !isFinite(place.x) || !isFinite(place.y))
+    return { x: Math.round(maxX / 2), y: Math.round(maxY / 2) }
+  return { x: Math.round(Math.min(Math.max(0, place.x), maxX)),
+           y: Math.round(Math.min(Math.max(0, place.y), maxY)) }
+}
+
+function placeOn(places, screenName) {
+  var p = places && screenName ? places[String(screenName)] : null
+  return p && isFinite(p.x) && isFinite(p.y) ? { x: Number(p.x), y: Number(p.y) } : null
+}
+
+// A new map rather than an edit, so QML notices. A null place forgets the
+// screen's, which puts the card back in the middle.
+function withPlace(places, screenName, place) {
+  var out = {}
+  for (var k in (places || {})) if (k !== String(screenName)) out[k] = places[k]
+  if (place) out[String(screenName)] = { x: Math.round(place.x), y: Math.round(place.y) }
+  return out
+}
+
+// The monitor under a point in Hyprland's layout, and the point on it. Layout
+// coordinates are logical, a monitor's width and height are not: divide by its
+// scale, and swap them when it is turned on its side.
+function monitorAt(monitors, x, y) {
+  var list = monitors || []
+  for (var i = 0; i < list.length; i++) {
+    var m = list[i]
+    var scale = Number(m.scale) || 1
+    var turned = (Number(m.transform) || 0) % 2 === 1
+    var w = (turned ? m.height : m.width) / scale
+    var h = (turned ? m.width : m.height) / scale
+    if (x >= m.x && x < m.x + w && y >= m.y && y < m.y + h)
+      return { name: String(m.name), x: x - m.x, y: y - m.y, width: w, height: h }
+  }
+  return null
+}
+
+// Where a drag let go that ended on another screen: the card goes with the
+// pointer, held where it was grabbed. Null while the pointer is still on the
+// card's own screen, or on none that Hyprland knows.
+function dropOnScreen(answer, fromScreen, grabX, grabY) {
+  if (!answer || !answer.cursor) return null
+  var at = monitorAt(answer.monitors, Number(answer.cursor.x), Number(answer.cursor.y))
+  if (!at || at.name === String(fromScreen)) return null
+  return { screen: at.name, place: { x: at.x - grabX, y: at.y - grabY } }
+}
+
 // ---- Handing a story to Herdr.
 // The agent name has to match Herdr's alias rule, and the branch is the same
 // sc- reference the panel already shows, so the checkout and the story can be
@@ -1844,6 +1900,8 @@ if (typeof module !== "undefined") {
     openCount: openCount, startedCount: startedCount,
     storyKey: storyKey, unseenStories: unseenStories, unseenCount: unseenCount,
     newlyAssigned: newlyAssigned, assignedNotices: assignedNotices, noticeText: noticeText, noticeCommand: noticeCommand,
+    clampPlace: clampPlace, placeOn: placeOn, withPlace: withPlace,
+    monitorAt: monitorAt, dropOnScreen: dropOnScreen,
     noteSeen: noteSeen, seenIdsOf: seenIdsOf, sameIds: sameIds,
     settingOptions: settingOptions, resolveTeamSetting: resolveTeamSetting,
     resolveOwnerSetting: resolveOwnerSetting,

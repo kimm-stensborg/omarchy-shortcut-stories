@@ -127,6 +127,12 @@ It opens on the monitor you are working on. Once it is up it stays on that
 monitor: summoning it again from another one, or from the bar or a
 notification, brings the keyboard back to it where it is.
 
+Drag the panel by its header -- the row with **Shortcut** and the tabs -- to
+put it somewhere else. Let go on another monitor and it moves there, held
+where you grabbed it. Each monitor remembers its own spot, and the panel
+opens there next time. Double-click the header to put it back in the middle.
+A spot is never off the screen: on a smaller one it is pulled back in.
+
 ## Keys
 
 | Key | Does |
@@ -147,6 +153,7 @@ notification, brings the keyboard back to it where it is.
 | `Alt + I` | In the list, only the sprint today falls inside. Again shows everything. |
 | `Esc` | Closes a dropdown first. On a new story with something in it, warns, then cancels it and goes back to where you started it. Elsewhere it goes back a step, then closes the panel. |
 | `?` or `F1` | Every key, on a card over the panel. `?` where you are not typing, `F1` anywhere. |
+| drag the header | Moves the panel, onto another monitor too. Double-click puts it back in the middle. |
 
 In **My stories**: `↑` `↓` walk the list, `Enter` (or a click) opens the story,
 and `Ctrl + O` opens it in your browser. **All** and the current sprint sit
@@ -392,6 +399,7 @@ rather than going stale when this one ends.
 | `~/.cache/omarchy-shortcut-stories/refs.json` | Teams, workflows, people and iterations, so the pickers are filled before you open the panel |
 | `~/.cache/omarchy-shortcut-stories/status.json` | The count and how many stories you have not opened, for the bar widget to read |
 | `~/.cache/omarchy-shortcut-stories/seen.json` | The stories you have opened, so the badge only counts new ones |
+| `~/.cache/omarchy-shortcut-stories/places.json` | Where you dragged the panel to, per monitor |
 | `~/.cache/omarchy-shortcut-stories/shots/` | Screenshots and pasted images waiting for their story to be filed |
 | `~/.config/omarchy/shell.json` | The settings above, on the widget's entry. Team is stored as its id, so renaming a team in Shortcut does not unset it; a team name typed by hand still works. |
 

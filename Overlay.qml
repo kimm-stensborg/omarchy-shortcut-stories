@@ -188,7 +188,10 @@ Item {
     // It opens where you are working. Once up it stays on that screen, so a
     // summon from the bar or a notification does not pull it out from beside
     // the window you are copying from.
-    if (!root.opened) root.screenName = Hyprland.focusedMonitor ? String(Hyprland.focusedMonitor.name || "") : ""
+    if (!root.opened) {
+      root.screenName = Hyprland.focusedMonitor ? String(Hyprland.focusedMonitor.name || "") : ""
+      root.place = Model.placeOn(root.places, root.screenName)
+    }
     root.opened = true
     root.grabKeyboard()
     Qt.callLater(function() { root.focusPane() })
@@ -367,17 +370,75 @@ Item {
     return null
   }
 
+  // ---- Where the card stands. Dragged by its header; each screen remembers
+  // its own place, and a double-click on the header forgets it.
+  property var places: ({})
+  property var place: null          // this screen's, unclamped; null is the middle
+  property real grabX: 0            // where on the card the drag took hold
+  property real grabY: 0
+
+  function keepPlace() {
+    root.places = Model.withPlace(root.places, root.screenName, root.place)
+    placesFile.setText(JSON.stringify(root.places))
+  }
+
+  function centre() {
+    root.place = null
+    root.keepPlace()
+  }
+
+  FileView {
+    id: placesFile
+    path: (Quickshell.env("XDG_CACHE_HOME") || Quickshell.env("HOME") + "/.cache")
+      + "/omarchy-shortcut-stories/places.json"
+    atomicWrites: true
+    printErrors: false
+    onLoaded: {
+      try { var parsed = JSON.parse(text()); root.places = parsed && typeof parsed === "object" ? parsed : {} }
+      catch (e) { root.places = {} }
+    }
+  }
+
+  // A layer cannot be dragged off its screen, so a drag let go past the edge
+  // asks Hyprland where the pointer went and moves the card there.
+  Process {
+    id: dropProc
+    command: ["sh", "-c", 'printf \'{"cursor":%s,"monitors":%s}\' "$(hyprctl -j cursorpos)" "$(hyprctl -j monitors)"']
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var answer = null
+        try { answer = JSON.parse(text) } catch (e) {}
+        var drop = Model.dropOnScreen(answer, root.screenName, root.grabX, root.grabY)
+        if (drop) {
+          root.screenName = drop.screen
+          root.place = drop.place
+          Qt.callLater(root.grabKeyboard)
+        }
+        root.keepPlace()
+      }
+    }
+  }
+
   PanelWindow {
     id: panel
     visible: root.opened
     screen: root.openScreen
-    // No anchors: the layer is the card's size and Hyprland centres it, so
-    // the rest of the screen stays clickable -- the browser you are copying
-    // a URL out of, say. No scrim, and a click outside does not close it;
-    // Esc or the summon key does.
+    // The layer covers the screen but only the card takes input, so the rest
+    // stays clickable -- the browser you are copying a URL out of, say. No
+    // scrim, and a click outside does not close it; Esc or the summon key
+    // does. Covering the screen is what lets the card be dragged smoothly: it
+    // moves inside a surface that stays put, instead of asking Hyprland to
+    // move a card-sized one on every step and measuring against where that
+    // one was a moment ago.
+    anchors.top: true
+    anchors.bottom: true
+    anchors.left: true
+    anchors.right: true
+    mask: Region { item: card }
+    readonly property var shown: Model.clampPlace(root.place, panel.screenWidth, panel.screenHeight,
+                                                  panel.cardWidth, panel.cardHeight)
     color: "transparent"
-    implicitWidth: panel.cardWidth
-    implicitHeight: panel.cardHeight
     WlrLayershell.namespace: "omarchy-shortcut-stories"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: root.grabbing ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.OnDemand
@@ -395,7 +456,10 @@ Item {
 
     BorderSurface {
       id: card
-      anchors.fill: parent
+      x: panel.shown.x
+      y: panel.shown.y
+      width: panel.cardWidth
+      height: panel.cardHeight
       radius: root.cornerRadius
       color: root.background
       borderSpec: root.focused ? root.borderSpec : root.idleBorderSpec
@@ -450,48 +514,86 @@ Item {
           anchors.fill: parent
           spacing: Style.spacing.md
 
-          // ---- Header.
-          RowLayout {
+          // ---- Header. Also the handle: drag it to move the card, across to
+          // another screen if you like; double-click it to put the card back
+          // in the middle. The buttons sit above the handle and keep clicks.
+          Item {
             Layout.fillWidth: true
-            spacing: Style.spacing.md
+            implicitHeight: headerRow.implicitHeight
 
-            Text {
-              text: "Shortcut"
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.title
-              font.bold: true
-            }
+            MouseArea {
+              id: handle
+              anchors.fill: parent
+              cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+              property real pressX: 0
+              property real pressY: 0
+              property bool moved: false
 
-            Item { Layout.fillWidth: true }
-
-            Repeater {
-              model: [
-                { id: "compose", label: "New story" },
-                { id: "mine", label: "My stories" }
-              ]
-              Button {
-                required property var modelData
-                bordered: root.mode === modelData.id
-                text: {
-                  if (modelData.id !== "mine" || !root.store) return modelData.label
-                  var list = Model.storiesInScope(root.store.stories, root.refs, root.listScope, root.today)
-                  var n = Model.openCount(list, root.refs)
-                  return n ? modelData.label + " · " + n : modelData.label
-                }
-                foreground: root.mode === modelData.id ? root.accent : root.muted
-                fontFamily: root.fontFamily
-                onClicked: root.setMode(modelData.id)
+              onPressed: function(mouse) {
+                handle.pressX = mouse.x
+                handle.pressY = mouse.y
+                handle.moved = false
+                var onCard = handle.mapToItem(card, mouse.x, mouse.y)
+                root.grabX = onCard.x
+                root.grabY = onCard.y
               }
+              // The handle moves with the card, so each step is measured from
+              // where the press was on it rather than from the start.
+              onPositionChanged: function(mouse) {
+                if (!pressed) return
+                var dx = mouse.x - handle.pressX
+                var dy = mouse.y - handle.pressY
+                if (!handle.moved && Math.abs(dx) + Math.abs(dy) < 4) return
+                handle.moved = true
+                root.place = { x: panel.shown.x + dx, y: panel.shown.y + dy }
+              }
+              onReleased: if (handle.moved) dropProc.running = true
+              onDoubleClicked: root.centre()
             }
 
-            Button {
-              bordered: root.mode === "settings"
-              text: ""
-              tooltipText: "Settings (Ctrl+,)"
-              foreground: root.mode === "settings" ? root.accent : root.muted
-              fontFamily: root.fontFamily
-              onClicked: root.setMode("settings")
+            RowLayout {
+              id: headerRow
+              anchors.fill: parent
+              spacing: Style.spacing.md
+
+              Text {
+                text: "Shortcut"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.title
+                font.bold: true
+              }
+
+              Item { Layout.fillWidth: true }
+
+              Repeater {
+                model: [
+                  { id: "compose", label: "New story" },
+                  { id: "mine", label: "My stories" }
+                ]
+                Button {
+                  required property var modelData
+                  bordered: root.mode === modelData.id
+                  text: {
+                    if (modelData.id !== "mine" || !root.store) return modelData.label
+                    var list = Model.storiesInScope(root.store.stories, root.refs, root.listScope, root.today)
+                    var n = Model.openCount(list, root.refs)
+                    return n ? modelData.label + " · " + n : modelData.label
+                  }
+                  foreground: root.mode === modelData.id ? root.accent : root.muted
+                  fontFamily: root.fontFamily
+                  onClicked: root.setMode(modelData.id)
+                }
+              }
+
+              Button {
+                bordered: root.mode === "settings"
+                text: ""
+                tooltipText: "Settings (Ctrl+,)"
+                foreground: root.mode === "settings" ? root.accent : root.muted
+                fontFamily: root.fontFamily
+                onClicked: root.setMode("settings")
+              }
             }
           }
 

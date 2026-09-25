@@ -962,6 +962,11 @@ done
 echo "Model.js"
 node - "$DIR/Model.js" "$DIR/manifest.json" <<'JS' || FAIL=$((FAIL+1))
 const M = require(process.argv[2])
+const MONITORS = [
+  {name: "eDP-1", x: 5120, y: 480, width: 1920, height: 1200, scale: 1.25, transform: 0},
+  {name: "DP-5", x: 2560, y: 0, width: 2560, height: 1440, scale: 1, transform: 0},
+  {name: "DP-7", x: 0, y: 0, width: 2560, height: 1440, scale: 1, transform: 0}
+]
 const manifest = require(process.argv[3])
 
 const refs = {
@@ -1675,6 +1680,29 @@ cases.push(
   ["the page keeps every section", M.settingsPage(true).flat().length, M.SETTINGS.length],
   ["new story sits beside solve",
     M.settingsPage()[0][0].title + "|" + M.settingsPage()[1][0].title, "New story|Solve"],
+  ["no place is the middle", M.clampPlace(null, 1000, 800, 400, 200), {x: 300, y: 300}],
+  ["a place stays where it was put", M.clampPlace({x: 10, y: 20}, 1000, 800, 400, 200), {x: 10, y: 20}],
+  ["but never off the screen", M.clampPlace({x: 900, y: -50}, 1000, 800, 400, 200), {x: 600, y: 0}],
+  ["a card bigger than the screen sits in its corner", M.clampPlace({x: 50, y: 50}, 300, 100, 400, 200), {x: 0, y: 0}],
+  ["places are kept per screen",
+    M.placeOn(M.withPlace({"DP-5": {x: 1, y: 2}}, "DP-7", {x: 3, y: 4}), "DP-5"), {x: 1, y: 2}],
+  ["and a new one replaces the old",
+    M.placeOn(M.withPlace({"DP-7": {x: 1, y: 2}}, "DP-7", {x: 3, y: 4}), "DP-7"), {x: 3, y: 4}],
+  ["forgetting one puts it back in the middle",
+    M.placeOn(M.withPlace({"DP-7": {x: 1, y: 2}}, "DP-7", null), "DP-7"), null],
+  ["a screen with no place has none", M.placeOn({}, "DP-7"), null],
+  ["a point is on the monitor it is inside",
+    M.monitorAt(MONITORS, 3000, 100), {name: "DP-5", x: 440, y: 100, width: 2560, height: 1440}],
+  ["a scaled monitor is its logical size",
+    M.monitorAt(MONITORS, 5120 + 1535, 480 + 959).name, "eDP-1"],
+  ["and ends there", M.monitorAt(MONITORS, 5120 + 1537, 480), null],
+  ["a monitor on its side swaps width and height",
+    M.monitorAt([{name: "V", x: 0, y: 0, width: 2560, height: 1440, scale: 1, transform: 1}], 1000, 2000).name, "V"],
+  ["let go on another screen, the card follows the pointer",
+    M.dropOnScreen({cursor: {x: 3000, y: 500}, monitors: MONITORS}, "DP-7", 100, 20),
+    {screen: "DP-5", place: {x: 340, y: 480}}],
+  ["let go on its own screen, it stays", M.dropOnScreen({cursor: {x: 100, y: 100}, monitors: MONITORS}, "DP-7", 0, 0), null],
+  ["let go between screens, it stays", M.dropOnScreen({cursor: {x: 6000, y: 100}, monitors: MONITORS}, "DP-7", 0, 0), null],
   ["the demo switch is kept from everyone else",
     M.settingsPage(false).flat().flatMap(x => x.rows).some(r => r.key === "demo"), false],
   ["and the section it sat alone in goes with it",
