@@ -611,6 +611,19 @@ function cameFrom(mode, storyId) {
   return { mode: m, storyId: m === "mine" && isFinite(id) && id > 0 ? id : 0 }
 }
 
+// Where Esc on the settings lands: the pane you opened them from, and the
+// story if one was open. Settings are never the way out of the panel, so
+// with nowhere recorded -- the panel opened straight onto them -- it is the
+// pane the panel normally opens on.
+function settingsBack(from, defaultMode) {
+  var m = str(from && from.mode)
+  if (m === "compose" || m === "mine") {
+    var id = parseInt(from.storyId, 10)
+    return { mode: m, storyId: m === "mine" && isFinite(id) && id > 0 ? id : 0 }
+  }
+  return { mode: str(defaultMode) === "mine" ? "mine" : "compose", storyId: 0 }
+}
+
 // After filing one. Team, iteration and owner stay put when sticky: five
 // stories in a row usually belong to the same sprint. The PR link does not —
 // the next story is not about that pull request.
@@ -865,7 +878,9 @@ function storiesInScope(stories, refs, scope, todayIso) {
 }
 
 // Grouped by what kind of state the story is in, because "what am I doing" and
-// "what is waiting" are the two questions this list answers.
+// "what is waiting" are the two questions this list answers. Inside a kind,
+// each state gets its own heading, in workflow order: In Development and
+// Ready for Code Review are both in progress, but they are not the same news.
 function sectionStories(stories, refs, showDone) {
   var summaries = (stories || []).map(function(s) { return summarizeStory(s, refs) })
   var sections = []
@@ -878,10 +893,19 @@ function sectionStories(stories, refs, showDone) {
       if (a.statePosition !== b.statePosition) return a.statePosition - b.statePosition
       return a.updatedAt < b.updatedAt ? 1 : (a.updatedAt > b.updatedAt ? -1 : 0)
     })
-    var common = commonStateName(rows)
-    sections.push({ type: type, title: sectionTitle(type), stories: rows,
-                    commonState: common,
-                    heading: common ? sectionTitle(type) + " · " + common : sectionTitle(type) })
+    var byState = []
+    for (var j = 0; j < rows.length; j++) {
+      var name = str(rows[j].stateName)
+      var group = null
+      for (var g = 0; g < byState.length; g++) if (byState[g].commonState === name) group = byState[g]
+      if (!group) {
+        group = { type: type, title: sectionTitle(type), stories: [], commonState: name,
+                  heading: name ? sectionTitle(type) + " · " + name : sectionTitle(type) }
+        byState.push(group)
+      }
+      group.stories.push(rows[j])
+    }
+    for (var k = 0; k < byState.length; k++) sections.push(byState[k])
   }
   // A story whose state is not in the cache would otherwise vanish from a list
   // that is meant to show everything assigned to you.
@@ -891,22 +915,33 @@ function sectionStories(stories, refs, showDone) {
   return sections
 }
 
-// The state most of a section's stories are in, when at least two share it
-// -- it goes in the heading once, and a row only names its state when it is
-// a different one. Ten rows all saying "Prioritized & Ready for
-// Development" is noise; the one that says "Ready for Code Review" among
-// them is the news. "" when no state is shared, so every row keeps its own.
-function commonStateName(rows) {
-  var counts = {}
-  var best = ""
-  var most = 1
-  for (var i = 0; i < rows.length; i++) {
-    var name = str(rows[i].stateName)
-    if (name === "" || name === "Unknown") continue
-    counts[name] = (counts[name] || 0) + 1
-    if (counts[name] > most) { most = counts[name]; best = name }
+// The theme's named colours (green, red, ...) from its colors.toml. The
+// shell's own palette only carries foreground, accent, urgent and muted.
+function themeColors(raw) {
+  var colors = {}
+  var lines = str(raw).split("\n")
+  for (var i = 0; i < lines.length; i++) {
+    var match = lines[i].match(/^\s*([A-Za-z0-9_-]+)\s*=\s*["']?(#[0-9A-Fa-f]{6})\b/)
+    if (match) colors[match[1]] = match[2]
   }
-  return best
+  return colors
+}
+
+// A heading wears the colour of how far along its stories are, so the list
+// reads at a glance: green is being worked on, blue is next, magenta is done.
+// Backlog and the unknown stay quiet. "" means the muted text colour.
+var SECTION_COLORS = { started: "green", unstarted: "blue", done: "magenta" }
+// The colours Shortcut itself gives the three types.
+var TYPE_COLORS = { feature: "yellow", bug: "red", chore: "blue" }
+
+function sectionColor(type, colors, fallback) {
+  var name = SECTION_COLORS[str(type)]
+  return (name && colors && colors[name]) || fallback
+}
+
+function storyTypeColor(type, colors, fallback) {
+  var name = TYPE_COLORS[str(type)]
+  return (name && colors && colors[name]) || fallback
 }
 
 // The list as the pane walks it: a heading, then its stories, each knowing
@@ -915,7 +950,9 @@ function storyRows(sections) {
   var out = []
   for (var i = 0; i < (sections || []).length; i++) {
     var section = sections[i]
-    out.push({ kind: "header", title: section.heading, story: null, showState: false })
+    out.push({ kind: "header", title: section.heading, story: null, showState: false,
+               type: section.type, kindTitle: section.title, state: section.commonState,
+               first: i === 0 })
     for (var j = 0; j < section.stories.length; j++) {
       var story = section.stories[j]
       out.push({ kind: "story", title: "", story: story,
@@ -998,8 +1035,7 @@ var SETTINGS = [
       options: [{ value: "compose", label: "New story" }, { value: "mine", label: "My stories" }] },
     { key: "listScope", kind: "choice", label: "Show", fallback: "all",
       options: [{ value: "all", label: "Everything assigned to me" },
-                { value: "current", label: "The current sprint" }] },
-    { key: "showDone", kind: "toggle", label: "Show finished stories", fallback: false }
+                { value: "current", label: "The current sprint" }] }
   ]},
   { title: "Solve", rows: [
     { key: "solveWorkspace", kind: "picker", source: "workspaces", label: "Workspace", fallback: "",
@@ -1908,8 +1944,9 @@ if (typeof module !== "undefined") {
     ownerList: ownerList, addOwner: addOwner, removeOwner: removeOwner,
     ownerChips: ownerChips, ownerAddOptions: ownerAddOptions,
     fileList: fileList, addFiles: addFiles, removeFile: removeFile, withScreenshots: withScreenshots,
-    composeEscape: composeEscape, cameFrom: cameFrom,
-    commonStateName: commonStateName, storyRows: storyRows, linkChips: linkChips,
+    composeEscape: composeEscape, cameFrom: cameFrom, settingsBack: settingsBack,
+    storyRows: storyRows, themeColors: themeColors, sectionColor: sectionColor,
+    storyTypeColor: storyTypeColor, linkChips: linkChips,
     moveNotice: moveNotice, movedBackNotice: movedBackNotice, keyHelp: keyHelp,
     editBase: editBase, buildUpdatePatch: buildUpdatePatch, resolveIterationSetting: resolveIterationSetting,
     SOLVE_PROMPT_LIMIT: SOLVE_PROMPT_LIMIT,

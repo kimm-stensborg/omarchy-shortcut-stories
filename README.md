@@ -160,7 +160,8 @@ and `Ctrl + O` opens it in your browser. **All** and the current sprint sit
 above the list. `Alt + I`, or a click, switches between them. The sprint is
 whichever one today falls inside. Where more than one does, the list shows
 all of them, and the button says so. A story with no sprint is not in that
-list. The choice is remembered.
+list. The sprint also lists what you have finished in it, in a Done section
+at the bottom; **All** leaves finished stories out. The choice is remembered.
 
 In an **open story**: `←` `→` pick a state and `Enter` moves it there,
 `Ctrl + O` opens it in Shortcut, `Ctrl + G` opens its pull request on
@@ -235,10 +236,13 @@ Images can only go on a new story for now, not onto one you are editing.
 ## Reading a story
 
 A row in the list is a glance -- reference, name, and how long since it
-last changed. The stories are grouped by how far along they are, and the
-state most of a group shares is named once, in its heading: a row only says
-its state when it is a different one, so the story sitting in Code Review
-among ten that are Ready for Development is the one that stands out. A story
+last changed. The stories are grouped by how far along they are, and then
+by state, each with its own heading in workflow order -- "In progress · In
+Development" above "In progress · Code Review" -- so a row never has to repeat
+its state. The headings wear the theme's colours -- green for in progress,
+blue for ready, magenta for done -- and each story's glyph is coloured by its
+type, as Shortcut does: yellow for a feature, red for a bug, blue for a chore.
+Finished stories are dimmed. A story
 an agent is working on has a small robot beside it, in the accent colour when
 the agent wants you back. `Enter` or a click
 opens the story itself: who it is for, which sprint, the estimate, the
@@ -359,7 +363,9 @@ unchanged.
 
 `Ctrl + ,`, or the gear. The page is grouped: a new story, the list, Solve,
 and the bar. Changes apply as you make them; there is no Save. A dot marks
-an option that is no longer the default.
+an option that is no longer the default. `Esc` goes back to where you were --
+the form, the list, or the story you had open -- and never closes the panel;
+opened straight onto the settings, it goes to the pane the panel opens on.
 
 **Team**, **Iteration** and **Owner** are filled from your workspace, so you
 pick a real team and a real sprint rather than typing a name and hoping. Set
@@ -382,7 +388,6 @@ rather than going stale when this one ends.
 | Keep team and iteration after filing | on | Leaves them set for the next story |
 | Next to the glyph | Open stories | The same number as My stories, or how many of those are in progress |
 | Opens on | New story | Which pane the keybinding lands on |
-| Show finished stories | off | Keeps done stories in the list |
 | Show | Everything assigned to me | The list, or only the sprint today falls inside |
 | Workspace | Ask each time | The Herdr workspace Solve starts in |
 | In a worktree | off | Solve checks the story out beside the repo, on `sc-<id>` |

@@ -135,12 +135,14 @@ Item {
     root.loadingRefs = false
     var parsed = parse(text)
     if (parsed && parsed.ok) {
+      var first = root.refs === null
       root.refs = parsed
       root.failure = null
       root.tokenPolls = 0
       // The story list is meaningless without the workflows to read it
-      // against, so the first refs are what start it.
-      if (!storiesProc.running && !root.stories.length) refreshStories()
+      // against, so the first refs are what start it -- and they are what
+      // say which sprint's finished stories to ask for.
+      if (!storiesProc.running && (first || !root.stories.length)) refreshStories()
     } else {
       root.failure = parsed || { code: "error", error: "bin/shortcut gave no answer" }
       // The countdown belongs to the poll timer alone. Decrementing it here
@@ -154,6 +156,12 @@ Item {
   function refreshStories() {
     if (storiesProc.running || !root.configLoaded) return
     root.loadingStories = true
+    // The finished stories of the current sprint come along too, for the
+    // Done section that scope shows. Before refs there is no sprint to name.
+    var today = new Date().toISOString().slice(0, 10)
+    var sprints = Model.currentIterations(root.refs, today).map(function(it) { return String(it.id) })
+    storiesProc.command = sprints.length
+      ? [root.cli, "mine", "--done-in", sprints.join(",")] : [root.cli, "mine"]
     storiesProc.running = true
   }
 
@@ -911,7 +919,6 @@ Item {
 
   Process {
     id: storiesProc
-    command: [root.cli, "mine"]
     environment: root.cliEnvironment
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.takeStories(text) }
   }

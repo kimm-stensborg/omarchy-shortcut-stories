@@ -12,7 +12,9 @@
 #   shortcut paste             save an image on the clipboard for a story, if there is one
 #   shortcut update <id>       read one JSON object on stdin and rewrite the story with it
 #   shortcut pr <url>          read a GitHub pull request (title, body, url) for the form
-#   shortcut mine [--limit N]  the stories assigned to you that are not done
+#   shortcut mine [--limit N] [--done-in ID,...]
+#                              the stories assigned to you that are not done, plus
+#                              the finished ones in the given iterations
 #   shortcut move <id> <state> move a story to another workflow state
 #   shortcut show <id>         one story in full: description, tasks and comments
 #
@@ -475,11 +477,20 @@ story_summary='{
 # member UUID and the fixed state-type enum, so nothing here can be broken by a
 # mention name with a dot in it or by a change to the operator grammar.
 cmd_mine() {
-  local limit=50
-  if [[ ${1:-} == "--limit" ]]; then
-    limit=${2:-50}
-    [[ $limit =~ ^[0-9]+$ ]] || fail "--limit needs a number" usage
-  fi
+  local limit=50 done_in=""
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --limit)
+        limit=${2:-50}
+        [[ $limit =~ ^[0-9]+$ ]] || fail "--limit needs a number" usage
+        shift 2 || shift ;;
+      --done-in)
+        done_in=${2:-}
+        [[ $done_in =~ ^[0-9]+(,[0-9]+)*$ ]] || fail "--done-in needs iteration ids" usage
+        shift 2 ;;
+      *) fail "mine does not know $1" usage ;;
+    esac
+  done
 
   if [[ -n ${SHORTCUT_DEMO:-} ]]; then
     jq -cn --argjson now "$(now)" '{ok: true, fetchedAt: $now, total: 2, stories: [
@@ -505,10 +516,24 @@ cmd_mine() {
   status=$(api POST "/stories/search" "$WORK/mine" "$WORK/query.json")
   check_status "$status" "$WORK/mine" "Searching your stories"
 
-  jq -c --argjson now "$(now)" --argjson limit "$limit" \
-    "(if type == \"array\" then . else (.data // []) end) as \$all
+  # What you finished in the current sprint rides along after the open ones,
+  # outside the limit and the count: it is there to look back at, not to do.
+  echo '[]' >"$WORK/done"
+  if [[ -n $done_in ]]; then
+    jq -cn --arg owner "$me" --arg ids "$done_in" \
+      '{owner_id: $owner, workflow_state_types: ["done"],
+        iteration_ids: ($ids | split(",") | map(tonumber)), archived: false}' >"$WORK/done-query.json"
+    status=$(api POST "/stories/search" "$WORK/done" "$WORK/done-query.json")
+    check_status "$status" "$WORK/done" "Searching your finished stories"
+  fi
+
+  jq -c --argjson now "$(now)" --argjson limit "$limit" --slurpfile done "$WORK/done" \
+    "def rows: if type == \"array\" then . else (.data // []) end;
+     rows as \$all
      | {ok: true, fetchedAt: \$now, total: (\$all | length),
-        stories: (\$all | sort_by(.updated_at) | reverse | .[0:\$limit] | map($story_summary))}" \
+        stories: ((\$all | sort_by(.updated_at) | reverse | .[0:\$limit])
+                  + (\$done[0] | rows | sort_by(.updated_at) | reverse)
+                  | map($story_summary))}" \
     "$WORK/mine" || fail "Shortcut sent stories that could not be read" http
 }
 

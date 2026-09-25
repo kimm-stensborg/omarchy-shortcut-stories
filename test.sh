@@ -477,6 +477,25 @@ is "but not the count"      "$(jq -r .total <<<"$out")" "2"
 out=$(s mine --limit abc)
 is "a junk limit is refused" "$(jq -r .code <<<"$out")" "usage"
 
+# The mock answers every search with the same two stories, so the finished
+# ones are those two again, after the open ones.
+reset_log
+out=$(s mine --done-in 42,44)
+is "--done-in asks a second time"   "$(log | grep -c 'POST /api/v3/stories/search')" "2"
+body=$(log | sed -n 's/.*body=//p' | tail -1)
+is "for finished stories"           "$(jq -c .workflow_state_types <<<"$body")" '["done"]'
+is "in the sprints it was given"    "$(jq -c .iteration_ids <<<"$body")" '[42,44]'
+is "and still only yours"           "$(jq -r .owner_id <<<"$body")" "me-uuid"
+is "they come after the open ones"  "$(jq -r '.stories | length' <<<"$out")" "4"
+is "but not in the count"           "$(jq -r .total <<<"$out")" "2"
+out=$(s mine --limit 1 --done-in 42)
+is "the limit trims only the open ones" "$(jq -r '.stories | length' <<<"$out")" "3"
+reset_log
+s mine >/dev/null
+is "without it there is one search" "$(log | grep -c 'POST /api/v3/stories/search')" "1"
+out=$(s mine --done-in soon)
+is "junk ids are refused"           "$(jq -r .code <<<"$out")" "usage"
+
 # ---- move ----------------------------------------------------------------
 echo "move"
 reset_log
@@ -1291,6 +1310,11 @@ const cases = [
   ["or to the story that was open",       M.cameFrom("mine", 1234).storyId, 1234],
   ["or to the settings",                  M.cameFrom("settings", 1234).storyId, 0],
   ["opened straight onto the form, nowhere", M.cameFrom("compose", 0), null],
+  ["esc on the settings goes back to the form", M.settingsBack({mode: "compose"}, "mine").mode, "compose"],
+  ["or to the story that was open",       JSON.stringify(M.settingsBack({mode: "mine", storyId: 1234}, "compose")), '{"mode":"mine","storyId":1234}'],
+  ["opened straight onto them, where the panel opens",
+    JSON.stringify(M.settingsBack(null, "mine")), '{"mode":"mine","storyId":0}'],
+  ["and never nowhere",                   M.settingsBack({mode: "settings"}, "").mode, "compose"],
   // undoing a move
   ["a move says where it went and how back",
     M.moveNotice(prRefs, {id: 7, from: 7001, to: 7002}), "Moved sc-7 to In Development · Ctrl+Z moves it back"],
@@ -1318,12 +1342,6 @@ const cases = [
   ["the same link twice is one chip",       M.linkChips(["https://x.io/a", "https://x.io/a"], "").length, 1],
   ["blank links are dropped",               M.linkChips(["", "  "], "").length, 0],
   ["no links, no chips",                    M.linkChips(null, "").length, 0],
-  ["the state most of a section shares",
-    M.commonStateName([{stateName: "Ready"}, {stateName: "Review"}, {stateName: "Ready"}]), "Ready"],
-  ["one story alone does not make a heading",
-    M.commonStateName([{stateName: "Ready"}, {stateName: "Review"}]), ""],
-  ["an unknown state is never the heading",
-    M.commonStateName([{stateName: "Unknown"}, {stateName: "Unknown"}]), ""],
   ["the heading names it",
     M.storyRows([{heading: "Ready · Prioritized", commonState: "Prioritized",
                   stories: [{stateName: "Prioritized"}, {stateName: "Review"}]}])[0].title, "Ready · Prioritized"],
@@ -1379,6 +1397,26 @@ cases.push(
   ["newest first inside a section",
     M.sectionStories(stories, refs, false)[1].stories.map(s => s.name).join(","), "D,A"],
   ["an empty list has no sections", M.sectionStories([], refs, true).length, 0],
+  ["each state in a kind gets its own heading",
+    M.sectionStories([
+      {id: 1, name: "A", workflowStateId: 7003, updatedAt: "2026-09-20T10:00:00Z"},
+      {id: 2, name: "B", workflowStateId: 7002, updatedAt: "2026-09-21T10:00:00Z"},
+      {id: 3, name: "C", workflowStateId: 7003, updatedAt: "2026-09-22T10:00:00Z"}], prRefs, false)
+      .map(s => s.heading + ":" + s.stories.map(r => r.name).join("")).join("|"),
+    "In progress · In Development:B|In progress · Code Review:CA"],
+  ["the theme's named colours are read",
+    JSON.stringify(M.themeColors('accent = "#7aa2f7"\ngreen = "#9ece6a"\nmode = "dark"')), '{"accent":"#7aa2f7","green":"#9ece6a"}'],
+  ["in progress is green",            M.sectionColor("started", {green: "#0f0"}, "grey"), "#0f0"],
+  ["backlog stays quiet",             M.sectionColor("backlog", {green: "#0f0"}, "grey"), "grey"],
+  ["a theme without the colour falls back", M.sectionColor("done", {}, "grey"), "grey"],
+  ["a bug is red",                    M.storyTypeColor("bug", {red: "#f00"}, "grey"), "#f00"],
+  ["a header row knows its kind and state",
+    JSON.stringify((({type, kindTitle, state, first}) => ({type, kindTitle, state, first}))(
+      M.storyRows(M.sectionStories([{id: 1, workflowStateId: 7002}], prRefs, false))[0])),
+    '{"type":"started","kindTitle":"In progress","state":"In Development","first":true}'],
+  ["so no row repeats it",
+    M.storyRows(M.sectionStories([{id: 1, workflowStateId: 7002}, {id: 2, workflowStateId: 7003}], prRefs, false))
+      .filter(r => r.kind === "story" && r.showState).length, 0],
   ["a story in no known state is still shown",
     M.sectionStories([{id: 9, name: "Z", workflowStateId: 7}], refs, false)[0].title, "Elsewhere"],
   ["all keeps every story",
@@ -1672,7 +1710,7 @@ cases.push(
   ["a missing value reads its default", M.readSetting({}, "barLabel"), "count"],
   ["a wrong value reads its default",   M.readSetting({barLabel: "nonsense"}, "barLabel"), "count"],
   ["a number is clamped",     M.readSetting({refreshMinutes: 999}, "refreshMinutes"), 60],
-  ["a word reads as a toggle", M.readSetting({showDone: "on"}, "showDone"), true],
+  ["a word reads as a toggle", M.readSetting({stickyFields: "on"}, "stickyFields"), true],
   ["the default is not written", JSON.stringify(M.nextEntry({id: "x"}, "x", {barLabel: "count"})), '{"id":"x"}'],
   ["a change is written",     M.nextEntry({id: "x"}, "x", {barLabel: "none"}).barLabel, "none"],
   ["reset keeps the id",      JSON.stringify(M.nextEntry({id: "x", barLabel: "none"}, "x", null)), '{"id":"x"}'],

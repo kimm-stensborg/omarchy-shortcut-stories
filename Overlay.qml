@@ -48,6 +48,10 @@ Item {
   // Alt+1 leaves the list, a story or the settings for the form, cleared
   // when the panel is opened straight onto it.
   property var composeFrom: null
+  // Where the settings were opened from, so Esc goes back there. The draft's
+  // own way back rides along, so going back to the form does not then lead
+  // Esc round to the settings again.
+  property var settingsFrom: null
   // The ? card over the pane: every key, grouped by where it works.
   property bool helpOpen: false
   // While the card is up the keyboard is the card's: the pane underneath
@@ -80,7 +84,6 @@ Item {
   readonly property bool stickyFields: Model.readSetting(settings, "stickyFields")
   readonly property string defaultIteration: Model.readSetting(settings, "defaultIteration")
   readonly property string defaultOwner: Model.readSetting(settings, "defaultOwner")
-  readonly property bool showDone: Model.readSetting(settings, "showDone")
   readonly property string listScope: Model.readSetting(settings, "listScope")
   readonly property string today: new Date().toISOString().slice(0, 10)
   readonly property string defaultMode: Model.readSetting(settings, "defaultMode")
@@ -166,9 +169,11 @@ Item {
       else root.grabKeyboard()
       return
     }
+    var was = root.opened && root.mode !== "settings" ? root.here() : null
     root.mode = payload.mode === "mine" || payload.mode === "settings"
       ? String(payload.mode)
       : (payload.mode === "compose" ? "compose" : root.defaultMode)
+    if (root.mode === "settings" && (was || !root.opened)) root.settingsFrom = was
     root.discardArmed = false
     root.composeFrom = null
     if (root.store) root.store.ensureRefs()
@@ -192,6 +197,7 @@ Item {
       root.screenName = Hyprland.focusedMonitor ? String(Hyprland.focusedMonitor.name || "") : ""
       root.place = Model.placeOn(root.places, root.screenName)
     }
+    if (!root.opened) themeFile.reload()
     root.opened = true
     root.grabKeyboard()
     Qt.callLater(function() { root.focusPane() })
@@ -250,7 +256,22 @@ Item {
     })
   }
 
+  function here() {
+    return { mode: root.mode, storyId: root.storyOpen ? root.store.detailFor : 0,
+             composeFrom: root.composeFrom }
+  }
+
+  function leaveSettings() {
+    var from = root.settingsFrom
+    var back = Model.settingsBack(from, root.defaultMode)
+    root.settingsFrom = null
+    root.setMode(back.mode)
+    if (back.mode === "compose") root.composeFrom = from ? from.composeFrom : null
+    if (back.storyId && root.store) root.store.showStory(back.storyId)
+  }
+
   function setMode(next) {
+    if (next === "settings" && root.mode !== "settings") root.settingsFrom = root.here()
     if (next === "compose" && root.mode !== "compose")
       root.composeFrom = Model.cameFrom(root.mode, root.store ? root.store.detailFor : 0)
     if (root.store && root.storyOpen) root.store.closeStory()
@@ -268,7 +289,7 @@ Item {
 
   // Esc is tiered: a dropdown eats it first, then a focused field gives up its
   // focus without losing what is typed in it, and only then does the panel
-  // close. A draft with anything in it costs a second Esc, because a reflex
+  // close -- except from the settings, which only ever go back. A draft with anything in it costs a second Esc, because a reflex
   // keystroke should not throw away a story you were halfway through writing.
   function escapePressed() {
     if (root.helpOpen) { root.helpOpen = false; return }
@@ -310,6 +331,7 @@ Item {
       root.discardArmed = false
       return
     }
+    if (root.mode === "settings") { root.leaveSettings(); return }
     root.dismiss()
   }
 
@@ -385,6 +407,16 @@ Item {
   function centre() {
     root.place = null
     root.keepPlace()
+  }
+
+  // The theme's named colours, for the section headings and story types.
+  // Read again on every open so a theme switch is picked up.
+  property var themeColors: ({})
+  FileView {
+    id: themeFile
+    path: Quickshell.env("HOME") + "/.local/state/omarchy/current/theme/colors.toml"
+    printErrors: false
+    onLoaded: root.themeColors = Model.themeColors(text())
   }
 
   FileView {
@@ -700,6 +732,8 @@ Item {
         + " · ? keys · Esc back"
     if (root.mode === "mine")
       return "Enter opens a story · Alt+I the current sprint · ? keys · Esc closes"
+    if (root.mode === "settings")
+      return "Alt+1 a new story · ? keys · Esc back"
     return "Alt+1 a new story · ? keys · Esc closes"
   }
 

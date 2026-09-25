@@ -16,7 +16,6 @@ Item {
   property var store: null
 
   readonly property var refs: pane.overlay ? pane.overlay.refs : null
-  readonly property bool showDone: pane.overlay ? pane.overlay.showDone : false
   readonly property string scope: pane.overlay ? pane.overlay.listScope : "all"
   readonly property string today: pane.overlay && pane.overlay.today
     ? pane.overlay.today : new Date().toISOString().slice(0, 10)
@@ -27,6 +26,7 @@ Item {
   readonly property color foreground: pane.overlay ? pane.overlay.foreground : Color.menu.text
   readonly property color muted: pane.overlay ? pane.overlay.muted : Color.muted
   readonly property color accent: pane.overlay ? pane.overlay.accent : Color.accent
+  readonly property var themeColors: pane.overlay ? pane.overlay.themeColors : ({})
   readonly property string fontFamily: pane.overlay ? pane.overlay.fontFamily : Style.font.menuFamily
 
   // The sections flattened into rows, because a ListView wants one model and
@@ -34,8 +34,10 @@ Item {
   readonly property var scopedStories: Model.storiesInScope(
     pane.store ? pane.store.stories : [], pane.refs, pane.scope, pane.today)
 
+  // What you finished only reads as progress against a sprint. Across
+  // everything assigned to you it is just a pile that keeps growing.
   readonly property var rows: Model.storyRows(
-    Model.sectionStories(pane.scopedStories, pane.refs, pane.showDone))
+    Model.sectionStories(pane.scopedStories, pane.refs, pane.scope === "current"))
 
   // "3 hours ago" has to move on while the panel sits open.
   property real now: Date.now() / 1000
@@ -168,10 +170,13 @@ Item {
         id: list
         Layout.fillWidth: true
         Layout.fillHeight: true
+        // Room between the filter and the first heading, so the list does not
+        // read as part of the buttons above it.
+        Layout.topMargin: Style.spacing.xl
         visible: pane.rows.length > 0
         clip: true
         model: pane.rows
-        spacing: Style.spacing.xxs
+        spacing: Style.spacing.xs
         boundsBehavior: Flickable.StopAtBounds
 
         delegate: Loader {
@@ -186,16 +191,50 @@ Item {
     }
   }
 
+  // How far along, in its colour and behind a dot of it, then the state in
+  // plain muted text. The gap above parts one group from the last; the room
+  // under the filter is the list's own margin.
   Component {
     id: headerRow
     Item {
-      height: header.implicitHeight + Style.spacing.md
-      PanelSectionHeader {
+      id: headerItem
+      readonly property var info: parent.rowData
+      readonly property color tint: Model.sectionColor(info.type, pane.themeColors, pane.muted)
+      height: header.implicitHeight + (info.first ? Style.spacing.xs : Style.spacing.xl + Style.spacing.md) + Style.spacing.xxs
+
+      RowLayout {
         id: header
         anchors.bottom: parent.bottom
+        anchors.bottomMargin: Style.spacing.xxs
         anchors.left: parent.left
         anchors.right: parent.right
-        text: parent.parent.rowData.title
+        anchors.leftMargin: Style.spacing.sm
+        spacing: Style.spacing.sm
+
+        Rectangle {
+          Layout.alignment: Qt.AlignVCenter
+          Layout.preferredWidth: Style.space(6)
+          Layout.preferredHeight: Style.space(6)
+          radius: Style.space(3)
+          color: headerItem.tint
+        }
+
+        PanelSectionHeader {
+          text: headerItem.info.kindTitle || headerItem.info.title
+          foreground: headerItem.tint
+          color: headerItem.tint
+          fontFamily: pane.fontFamily
+        }
+
+        Text {
+          Layout.fillWidth: true
+          visible: !!headerItem.info.state
+          elide: Text.ElideRight
+          text: headerItem.info.state || ""
+          color: pane.muted
+          font.family: pane.fontFamily
+          font.pixelSize: Style.font.caption
+        }
       }
     }
   }
@@ -210,7 +249,7 @@ Item {
       readonly property bool current: parent.rowIndex === pane.cursor
       readonly property bool busy: pane.moving === story.id
 
-      height: body.implicitHeight + Style.spacing.sm * 2
+      height: body.implicitHeight + Style.spacing.md * 2
 
       Rectangle {
         anchors.fill: parent
@@ -227,8 +266,9 @@ Item {
         id: body
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.margins: Style.spacing.sm
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.leftMargin: Style.spacing.sm
+        anchors.rightMargin: Style.spacing.sm
         spacing: Style.spacing.sm
 
         RowLayout {
@@ -241,7 +281,7 @@ Item {
             Layout.preferredWidth: Style.space(16)
             horizontalAlignment: Text.AlignHCenter
             text: row.story.glyph
-            color: pane.muted
+            color: Model.storyTypeColor(row.story.storyType, pane.themeColors, pane.muted)
             font.family: pane.fontFamily
             font.pixelSize: Style.font.body
           }
@@ -258,7 +298,8 @@ Item {
             Layout.fillWidth: true
             elide: Text.ElideRight
             text: row.story.name
-            color: row.busy ? pane.muted : pane.foreground
+            // Finished work is there to look back at, so it steps back.
+            color: row.busy || row.story.stateType === "done" ? pane.muted : pane.foreground
             font.family: pane.fontFamily
             font.pixelSize: Style.font.body
           }

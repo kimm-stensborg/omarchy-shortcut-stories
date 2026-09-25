@@ -92,16 +92,6 @@
         "defaultValue": "compose"
       },
       {
-        "key": "showDone",
-        "type": "enum",
-        "label": "Show finished stories in the list",
-        "options": [
-          "on",
-          "off"
-        ],
-        "defaultValue": "off"
-      },
-      {
         "key": "listScope",
         "type": "enum",
         "label": "Which stories the list shows",
