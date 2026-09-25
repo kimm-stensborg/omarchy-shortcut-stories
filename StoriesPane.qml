@@ -34,6 +34,12 @@ Item {
   readonly property color muted: pane.overlay ? pane.overlay.muted : Color.muted
   readonly property color accent: pane.overlay ? pane.overlay.accent : Color.accent
   readonly property var themeColors: pane.overlay ? pane.overlay.themeColors : ({})
+  readonly property color background: pane.overlay ? pane.overlay.background : Color.menu.background
+
+  // The filter's pills: one height, and a colour at a given strength.
+  readonly property int pillHeight: Style.spacing.controlHeight
+  readonly property int pillInset: 3
+  function tint(c, a) { return Qt.rgba(c.r, c.g, c.b, a) }
   readonly property string fontFamily: pane.overlay ? pane.overlay.fontFamily : Style.font.menuFamily
 
   // The sections flattened into rows, because a ListView wants one model and
@@ -218,27 +224,28 @@ Item {
       anchors.fill: parent
       spacing: Style.spacing.sm
 
-      // The filter: which stories on the left, whose on the right, both the
-      // height of one control so the row reads as one line.
+      // The filter: which stories on the left, whose on the right. Both are
+      // soft pills of one height, no borders, so the row reads as one quiet
+      // line over the list rather than a row of form fields.
       RowLayout {
         Layout.fillWidth: true
+        Layout.topMargin: Style.spacing.xs
         visible: !!pane.refs
         spacing: Style.spacing.md
 
-        // All and the sprint as one segmented control: the chosen half is
-        // filled, the other is plain text, and the pair shares one border.
+        // All and the sprint as one segmented pill: the chosen half is tinted
+        // in the accent, the other is plain text on the track.
         Rectangle {
-          implicitWidth: scopeRow.implicitWidth + 2
-          implicitHeight: Style.spacing.controlHeight
-          radius: Style.cornerRadius
-          color: "transparent"
-          border.width: 1
-          border.color: Style.normalBorderFor(pane.foreground, pane.accent)
+          implicitWidth: scopeRow.implicitWidth + pane.pillInset * 2
+          implicitHeight: pane.pillHeight
+          radius: height / 2
+          color: pane.tint(pane.foreground, 0.06)
 
           Row {
             id: scopeRow
             anchors.fill: parent
-            anchors.margins: 1
+            anchors.margins: pane.pillInset
+            spacing: pane.pillInset
 
             Repeater {
               model: [
@@ -252,17 +259,19 @@ Item {
                 readonly property bool chosen: (pane.scope === "current") === (modelData.value === "current")
                 width: segmentText.implicitWidth + Style.spacing.controlPaddingX * 2
                 height: scopeRow.height
-                radius: Style.cornerRadius - 1
-                color: segment.chosen ? Style.selectionFillFor(pane.foreground, pane.accent)
-                  : (segmentMouse.containsMouse && modelData.enabled ? Style.hoverFill : "transparent")
+                radius: height / 2
+                color: segment.chosen ? pane.tint(pane.accent, 0.18)
+                  : (segmentMouse.containsMouse && modelData.enabled ? pane.tint(pane.foreground, 0.06) : "transparent")
+                Behavior on color { ColorAnimation { duration: 120 } }
 
                 Row {
                   id: segmentText
                   anchors.centerIn: parent
-                  spacing: Style.spacing.md
+                  spacing: Style.spacing.sm
                   opacity: segment.modelData.enabled ? 1 : 0.5
 
                   Text {
+                    anchors.verticalCenter: parent.verticalCenter
                     text: segment.modelData.label
                     color: segment.chosen ? pane.accent : pane.muted
                     font.family: pane.fontFamily
@@ -270,16 +279,25 @@ Item {
                     font.bold: segment.chosen
                   }
 
-                  // The same size and colour as its label, only softer, so it
-                  // reads as part of it. Hidden until the list has been read:
+                  // A small badge, so the number sits beside the label rather
+                  // than running into it. Hidden until the list has been read:
                   // a 0 that is really "not yet" would be a lie.
-                  Text {
+                  Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
                     visible: segment.modelData.enabled && !pane.loading && !!pane.refs
-                    text: segment.modelData.count
-                    color: segment.chosen ? pane.accent : pane.muted
-                    opacity: 0.7
-                    font.family: pane.fontFamily
-                    font.pixelSize: Style.font.body
+                    implicitWidth: countText.implicitWidth + Style.spacing.md * 2
+                    implicitHeight: countText.implicitHeight + 2
+                    radius: height / 2
+                    color: segment.chosen ? pane.tint(pane.accent, 0.22) : pane.tint(pane.foreground, 0.08)
+
+                    Text {
+                      id: countText
+                      anchors.centerIn: parent
+                      text: segment.modelData.count
+                      color: segment.chosen ? pane.accent : pane.muted
+                      font.family: pane.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
                   }
                 }
 
@@ -298,20 +316,86 @@ Item {
 
         Item { Layout.fillWidth: true }
 
-        // Only with a default team: without one there is no one else to pick.
-        SearchableDropdown {
-          id: ownerPicker
+        // Whose, as a pill to match. Only with a default team: without one
+        // there is no one else to pick. The pill is what you see; the shell's
+        // dropdown is kept for its searchable popup, in a slot of no height
+        // level with the pill, so its own box never shows but the popup --
+        // drawn on the overlay, outside any clip -- opens just under the pill,
+        // wide enough for a name.
+        Item {
           visible: pane.ownerOptions.length > 0
-          Layout.preferredWidth: Style.space(180)
-          showLabel: false
-          rowHeight: Style.spacing.controlHeight
-          options: pane.ownerOptions
-          value: pane.owner
-          placeholderText: "Search teammates..."
-          foreground: pane.foreground
-          accent: pane.accent
-          fontFamily: pane.fontFamily
-          onChanged: function(v) { pane.setOwner(v); keys.forceActiveFocus() }
+          implicitWidth: ownerPill.implicitWidth
+          implicitHeight: pane.pillHeight
+
+          Item {
+            anchors.top: parent.top
+            anchors.right: parent.right
+            width: Style.space(240)
+            height: 0
+            clip: true
+
+          SearchableDropdown {
+            id: ownerPicker
+            width: parent.width
+            showLabel: false
+            rowHeight: pane.pillHeight
+            options: pane.ownerOptions
+            value: pane.owner
+            placeholderText: "Search teammates..."
+            foreground: pane.foreground
+            accent: pane.accent
+            fontFamily: pane.fontFamily
+            onChanged: function(v) { pane.setOwner(v); keys.forceActiveFocus() }
+          }
+          }
+
+          Rectangle {
+            id: ownerPill
+            anchors.fill: parent
+            implicitWidth: ownerRow.implicitWidth + Style.spacing.controlPaddingX * 2
+            radius: height / 2
+            color: pane.tint(pane.foreground, ownerMouse.containsMouse || ownerPicker.popupOpen ? 0.12 : 0.06)
+            Behavior on color { ColorAnimation { duration: 120 } }
+
+            Row {
+              id: ownerRow
+              anchors.centerIn: parent
+              spacing: Style.spacing.sm
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: pane.owner === "team" ? "" : ""
+                color: pane.others ? pane.accent : pane.muted
+                font.family: pane.fontFamily
+                font.pixelSize: Style.font.body
+              }
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: pane.ownerLabel()
+                color: pane.others ? pane.accent : pane.foreground
+                font.family: pane.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: pane.others
+              }
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: ""
+                color: pane.muted
+                font.family: pane.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            MouseArea {
+              id: ownerMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: ownerPicker.toggle()
+            }
+          }
         }
       }
 
@@ -355,6 +439,34 @@ Item {
             text: !pane.refs ? "Loading your workspace..."
               : (pane.loading ? Model.loadingListText(pane.owner, pane.ownerLabel())
                 : Model.emptyListText(pane.owner, pane.ownerLabel(), pane.scope))
+          }
+        }
+
+        // The list's edges fade into the card, so a row scrolling past the
+        // filter or the footer softens away instead of being cut in half.
+        Rectangle {
+          anchors.top: parent.top
+          anchors.left: parent.left
+          anchors.right: parent.right
+          height: Style.space(16)
+          z: 2
+          visible: list.visible && !list.atYBeginning
+          gradient: Gradient {
+            GradientStop { position: 0; color: pane.background }
+            GradientStop { position: 1; color: pane.tint(pane.background, 0) }
+          }
+        }
+
+        Rectangle {
+          anchors.bottom: parent.bottom
+          anchors.left: parent.left
+          anchors.right: parent.right
+          height: Style.space(16)
+          z: 2
+          visible: list.visible && !list.atYEnd
+          gradient: Gradient {
+            GradientStop { position: 0; color: pane.tint(pane.background, 0) }
+            GradientStop { position: 1; color: pane.background }
           }
         }
 

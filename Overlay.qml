@@ -604,33 +604,86 @@ Item {
 
               Item { Layout.fillWidth: true }
 
+              // Tabs rather than buttons: the one you are on is in the accent
+              // with a line under it that sits on the separator below, the
+              // others are quiet text that brightens under the pointer.
               Repeater {
                 model: [
-                  { id: "compose", label: "New story" },
-                  { id: "mine", label: "Stories" }
+                  { id: "compose", label: "New story", icon: "" },
+                  { id: "mine", label: "Stories", icon: "" },
+                  { id: "settings", label: "", icon: "\uf013" }
                 ]
-                Button {
+                Item {
+                  id: tab
                   required property var modelData
-                  bordered: root.mode === modelData.id
-                  text: {
-                    if (modelData.id !== "mine" || !root.store) return modelData.label
+                  readonly property bool current: root.mode === modelData.id
+                  readonly property string count: {
+                    if (modelData.id !== "mine" || !root.store) return ""
                     var list = Model.storiesInScope(root.store.stories, root.refs, root.listScope, root.today)
                     var n = Model.openCount(list, root.refs)
-                    return n ? modelData.label + " · " + n : modelData.label
+                    return n ? String(n) : ""
                   }
-                  foreground: root.mode === modelData.id ? root.accent : root.muted
-                  fontFamily: root.fontFamily
-                  onClicked: root.setMode(modelData.id)
-                }
-              }
+                  Layout.fillHeight: true
+                  implicitWidth: tabRow.implicitWidth + Style.spacing.md * 2
+                  implicitHeight: tabRow.implicitHeight
 
-              Button {
-                bordered: root.mode === "settings"
-                text: ""
-                tooltipText: "Settings (Ctrl+,)"
-                foreground: root.mode === "settings" ? root.accent : root.muted
-                fontFamily: root.fontFamily
-                onClicked: root.setMode("settings")
+                  Row {
+                    id: tabRow
+                    anchors.centerIn: parent
+                    spacing: Style.spacing.sm
+
+                    Text {
+                      anchors.verticalCenter: parent.verticalCenter
+                      text: tab.modelData.icon || tab.modelData.label
+                      color: tab.current ? root.accent
+                        : (tabMouse.containsMouse ? root.foreground : root.muted)
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      font.bold: tab.current
+                      Behavior on color { ColorAnimation { duration: 120 } }
+                    }
+
+                    Rectangle {
+                      anchors.verticalCenter: parent.verticalCenter
+                      visible: tab.count !== ""
+                      implicitWidth: tabCount.implicitWidth + Style.spacing.md * 2
+                      implicitHeight: tabCount.implicitHeight + 2
+                      radius: height / 2
+                      color: tab.current ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.22)
+                        : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08)
+
+                      Text {
+                        id: tabCount
+                        anchors.centerIn: parent
+                        text: tab.count
+                        color: tab.current ? root.accent : root.muted
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                      }
+                    }
+                  }
+
+                  Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: -Style.spacing.md
+                    height: 2
+                    radius: 1
+                    color: root.accent
+                    opacity: tab.current ? 1 : 0
+                    Behavior on opacity { NumberAnimation { duration: 150 } }
+                  }
+
+                  MouseArea {
+                    id: tabMouse
+                    anchors.fill: parent
+                    anchors.bottomMargin: -Style.spacing.md
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.setMode(tab.modelData.id)
+                  }
+                }
               }
             }
           }
