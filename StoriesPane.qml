@@ -20,7 +20,13 @@ Item {
   readonly property string today: pane.overlay && pane.overlay.today
     ? pane.overlay.today : new Date().toISOString().slice(0, 10)
   readonly property string sprintLabel: Model.currentIterationLabel(pane.refs, pane.today)
-  readonly property bool loading: pane.store ? pane.store.loadingStories : false
+  // Whose stories: you, the default team, or one teammate on it.
+  readonly property string owner: pane.store ? pane.store.listOwner : "me"
+  readonly property var ownerOptions: pane.store ? Model.listOwnerOptions(pane.refs, pane.store.teamId) : []
+  readonly property bool others: pane.owner !== "me"
+  readonly property bool othersReady: !!(pane.store && pane.store.otherFor === pane.owner)
+  readonly property bool loading: pane.others ? !pane.othersReady
+    : (pane.store ? pane.store.loadingStories : false)
   readonly property int moving: pane.store ? pane.store.movingStory : 0
 
   readonly property color foreground: pane.overlay ? pane.overlay.foreground : Color.menu.text
@@ -32,7 +38,8 @@ Item {
   // The sections flattened into rows, because a ListView wants one model and
   // the headers have to be walked past by the cursor anyway.
   readonly property var scopedStories: Model.storiesInScope(
-    pane.store ? pane.store.stories : [], pane.refs, pane.scope, pane.today)
+    !pane.store ? [] : (pane.others ? (pane.othersReady ? pane.store.otherStories : []) : pane.store.stories),
+    pane.refs, pane.scope, pane.today)
 
   // What you finished only reads as progress against a sprint. Across
   // everything assigned to you it is just a pile that keeps growing.
@@ -87,7 +94,21 @@ Item {
     keys.forceActiveFocus()
   }
 
-  function escapePressed() { return false }
+  function escapePressed() {
+    if (ownerPicker.popupOpen) { ownerPicker.close(); keys.forceActiveFocus(); return true }
+    return false
+  }
+
+  function setOwner(next) {
+    if (!pane.store || next === pane.owner) return
+    pane.store.persist("listOwner", next)
+  }
+
+  function ownerLabel() {
+    for (var i = 0; i < pane.ownerOptions.length; i++)
+      if (pane.ownerOptions[i].value === pane.owner) return pane.ownerOptions[i].label
+    return ""
+  }
 
   // Opening a story used to expand its states in the row. The row had no
   // space for anything you would actually read, so it opens the detail view
@@ -116,6 +137,10 @@ Item {
       if ((event.modifiers & Qt.AltModifier) && event.key === Qt.Key_I) {
         pane.toggleScope(); event.accepted = true; return
       }
+      if ((event.modifiers & Qt.AltModifier) && event.key === Qt.Key_O) {
+        if (pane.ownerOptions.length) ownerPicker.open()
+        event.accepted = true; return
+      }
       if (event.key === Qt.Key_Down) { pane.moveCursor(1); event.accepted = true }
       else if (event.key === Qt.Key_Up) { pane.moveCursor(-1); event.accepted = true }
       else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
@@ -127,57 +152,137 @@ Item {
       anchors.fill: parent
       spacing: Style.spacing.sm
 
+      // The filter: which stories on the left, whose on the right, both the
+      // height of one control so the row reads as one line.
       RowLayout {
         Layout.fillWidth: true
         visible: !!pane.refs
-        spacing: Style.spacing.sm
+        spacing: Style.spacing.md
 
-        Button {
-          bordered: pane.scope !== "current"
-          text: "All"
-          tooltipText: "Everything assigned to you (Alt+I)"
-          foreground: pane.scope !== "current" ? pane.accent : pane.muted
-          fontFamily: pane.fontFamily
-          onClicked: pane.setScope("all")
+        // All and the sprint as one segmented control: the chosen half is
+        // filled, the other is plain text, and the pair shares one border.
+        Rectangle {
+          implicitWidth: scopeRow.implicitWidth + 2
+          implicitHeight: Style.spacing.controlHeight
+          radius: Style.cornerRadius
+          color: "transparent"
+          border.width: 1
+          border.color: Style.normalBorderFor(pane.foreground, pane.accent)
+
+          Row {
+            id: scopeRow
+            anchors.fill: parent
+            anchors.margins: 1
+
+            Repeater {
+              model: [
+                { value: "all", label: "All", enabled: true },
+                { value: "current", label: pane.sprintLabel !== "" ? pane.sprintLabel : "No current sprint",
+                  enabled: pane.sprintLabel !== "" }
+              ]
+              delegate: Rectangle {
+                id: segment
+                required property var modelData
+                readonly property bool chosen: (pane.scope === "current") === (modelData.value === "current")
+                width: segmentText.implicitWidth + Style.spacing.controlPaddingX * 2
+                height: scopeRow.height
+                radius: Style.cornerRadius - 1
+                color: segment.chosen ? Style.selectionFillFor(pane.foreground, pane.accent)
+                  : (segmentMouse.containsMouse && modelData.enabled ? Style.hoverFill : "transparent")
+
+                Text {
+                  id: segmentText
+                  anchors.centerIn: parent
+                  text: segment.modelData.label
+                  color: segment.chosen ? pane.accent : pane.muted
+                  opacity: segment.modelData.enabled ? 1 : 0.5
+                  font.family: pane.fontFamily
+                  font.pixelSize: Style.font.body
+                }
+
+                MouseArea {
+                  id: segmentMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  enabled: segment.modelData.enabled
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: pane.setScope(segment.modelData.value)
+                }
+              }
+            }
+          }
         }
 
-        Button {
-          bordered: pane.scope === "current"
-          enabled: pane.sprintLabel !== ""
-          text: pane.sprintLabel !== "" ? pane.sprintLabel : "No current sprint"
-          tooltipText: "Only the sprint today falls inside (Alt+I)"
-          foreground: pane.scope === "current" ? pane.accent : pane.muted
+        Item { Layout.fillWidth: true }
+
+        // Only with a default team: without one there is no one else to pick.
+        SearchableDropdown {
+          id: ownerPicker
+          visible: pane.ownerOptions.length > 0
+          Layout.preferredWidth: Style.space(180)
+          showLabel: false
+          rowHeight: Style.spacing.controlHeight
+          options: pane.ownerOptions
+          value: pane.owner
+          placeholderText: "Search teammates..."
+          foreground: pane.foreground
+          accent: pane.accent
           fontFamily: pane.fontFamily
-          onClicked: pane.setScope("current")
+          onChanged: function(v) { pane.setOwner(v); keys.forceActiveFocus() }
         }
       }
 
-      Text {
-        Layout.fillWidth: true
-        visible: !pane.rows.length
-        horizontalAlignment: Text.AlignHCenter
-        color: pane.muted
-        font.family: pane.fontFamily
-        font.pixelSize: Style.font.body
-        text: pane.loading ? "Reading your stories..."
-          : (!pane.refs ? "Loading your workspace..."
-            : (pane.scope === "current"
-              ? "Nothing assigned to you in the current sprint."
-              : "Nothing is assigned to you."))
-      }
-
-      ListView {
-        id: list
+      // The list, or in its place a line saying why there is none. Either
+      // way it keeps the room under the filter, so the filter stays at the
+      // top while a list loads instead of drifting to the middle.
+      Item {
         Layout.fillWidth: true
         Layout.fillHeight: true
         // Room between the filter and the first heading, so the list does not
         // read as part of the buttons above it.
         Layout.topMargin: Style.spacing.xl
-        visible: pane.rows.length > 0
-        clip: true
-        model: pane.rows
-        spacing: Style.spacing.xs
-        boundsBehavior: Flickable.StopAtBounds
+
+        Column {
+          anchors.centerIn: parent
+          visible: !pane.rows.length
+          spacing: Style.spacing.sm
+
+          Text {
+            id: loader
+            property int tick: 0
+            anchors.horizontalCenter: parent.horizontalCenter
+            visible: pane.loading || !pane.refs
+            text: Model.loaderFrame(loader.tick, 18)
+            color: pane.accent
+            font.family: pane.fontFamily
+            font.pixelSize: Style.font.body
+            Timer {
+              interval: 70
+              repeat: true
+              running: loader.visible && pane.visible
+              onTriggered: loader.tick++
+            }
+          }
+
+          Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            color: pane.muted
+            font.family: pane.fontFamily
+            font.pixelSize: Style.font.body
+            text: !pane.refs ? "Loading your workspace..."
+              : (pane.loading ? Model.loadingListText(pane.owner, pane.ownerLabel())
+                : Model.emptyListText(pane.owner, pane.ownerLabel(), pane.scope))
+          }
+        }
+
+        ListView {
+          id: list
+          anchors.fill: parent
+          visible: pane.rows.length > 0
+          clip: true
+          model: pane.rows
+          spacing: Style.spacing.xs
+          boundsBehavior: Flickable.StopAtBounds
 
         delegate: Loader {
           required property int index
@@ -186,6 +291,7 @@ Item {
           sourceComponent: modelData.kind === "header" ? headerRow : storyRow
           property var rowData: modelData
           property int rowIndex: index
+        }
         }
       }
     }
@@ -318,6 +424,17 @@ Item {
             color: row.agent && row.agent.attention ? pane.accent : pane.muted
             font.family: pane.fontFamily
             font.pixelSize: Style.font.body
+          }
+
+          // Whose it is, when the list is the whole team's.
+          Text {
+            visible: pane.owner === "team"
+            Layout.maximumWidth: Style.space(160)
+            elide: Text.ElideRight
+            text: Model.ownerNames(pane.refs, row.story.ownerIds)
+            color: pane.muted
+            font.family: pane.fontFamily
+            font.pixelSize: Style.font.caption
           }
 
           // Only when it is not the state the heading already names.

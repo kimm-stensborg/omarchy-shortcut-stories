@@ -738,7 +738,8 @@ var KEY_HELP = [
     ["↑ ↓", "Walk the list"],
     ["Enter", "Open the story"],
     ["Ctrl + O", "Open it in Shortcut"],
-    ["Alt + I", "Only the current sprint, or everything"]] },
+    ["Alt + I", "Only the current sprint, or everything"],
+    ["Alt + O", "Whose: you, your team, or a teammate"]] },
   { title: "An open story", keys: [
     ["← →", "Pick a state"],
     ["Enter", "Move it there"],
@@ -778,6 +779,7 @@ function summarizeStory(story, refs) {
     statePosition: found ? (found.state.position || 0) : 0,
     groupName: group ? str(group.name) : "",
     iterationName: iteration ? str(iteration.name) : "",
+    ownerIds: (story && story.ownerIds) || [],
     prUrl: firstPrLink(story && story.externalLinks),
     updatedAt: str(story && story.updatedAt)
   }
@@ -879,6 +881,82 @@ function currentIterationLabel(refs, todayIso) {
   if (!list.length) return ""
   if (list.length === 1) return str(list[0].name)
   return "Current sprints"
+}
+
+// Whose stories the list shows. You, always first; then, when a default team
+// is set, the whole team and each teammate by name. With no team there is no
+// one else to pick, so the choice is not offered at all.
+function listOwnerOptions(refs, teamId) {
+  var group = findGroup(refs, teamId)
+  if (!group) return []
+  var meId = refs && refs.me ? str(refs.me.id) : ""
+  var ids = (group.memberIds || []).map(str)
+  var people = ((refs && refs.members) || []).filter(function(m) {
+    return ids.indexOf(str(m.id)) !== -1 && str(m.id) !== meId
+  }).sort(byName)
+  var out = [{ value: "me", label: "Me" }, { value: "team", label: str(group.name) }]
+  for (var i = 0; i < people.length; i++) out.push({ value: str(people[i].id), label: str(people[i].name) })
+  return out
+}
+
+// The stored choice, checked against the team it has to belong to: "team" or
+// a teammate, or "me" when the team is unset or they have left it.
+function resolveListOwner(refs, value, teamId) {
+  var wanted = trim(value)
+  var options = listOwnerOptions(refs, teamId)
+  for (var i = 0; i < options.length; i++) if (options[i].value === wanted) return wanted
+  return "me"
+}
+
+// What bin/shortcut mine is told, for a resolved choice.
+function listOwnerArgs(owner, teamId) {
+  if (owner === "team") return ["--team", str(teamId)]
+  if (owner && owner !== "me") return ["--owner", str(owner)]
+  return []
+}
+
+// Whose a story is, by first name, for a row in the team's list.
+function ownerNames(refs, ownerIds) {
+  var names = []
+  var ids = ownerIds || []
+  for (var i = 0; i < ids.length; i++) {
+    var member = findMember(refs, ids[i])
+    if (member) names.push(str(member.name).split(" ")[0])
+  }
+  return names.length ? names.join(", ") : "Unassigned"
+}
+
+// The loader: a scanner sweeping to and fro, the head a full block and the
+// tail fading behind it the way it came. One frame per tick; the track is
+// dots so its length reads even where the scanner is not.
+function loaderFrame(tick, width) {
+  var w = Math.max(4, width || 18)
+  var span = (w - 1) * 2
+  var t = ((tick % span) + span) % span
+  var head = t < w ? t : span - t
+  var dir = t < w ? -1 : 1   // the tail trails behind the way it moves
+  var cells = []
+  for (var i = 0; i < w; i++) cells.push("·")
+  var shades = ["█", "▓", "▒", "░"]
+  for (var k = shades.length - 1; k >= 0; k--) {
+    var at = head + dir * k
+    if (at >= 0 && at < w) cells[at] = shades[k]
+  }
+  return "[" + cells.join("") + "]"
+}
+
+// What the list says while it is being read, naming whose it is.
+function loadingListText(owner, ownerLabel) {
+  if (owner && owner !== "me" && str(ownerLabel)) return "Reading " + str(ownerLabel) + "'s stories..."
+  return "Reading your stories..."
+}
+
+// What an empty list says, in words about whose list it is.
+function emptyListText(owner, ownerLabel, scope) {
+  var sprint = scope === "current" ? " in the current sprint" : ""
+  if (owner === "team") return "Nothing open on " + (str(ownerLabel) || "the team") + sprint + "."
+  if (owner && owner !== "me") return "Nothing assigned to " + (str(ownerLabel) || "them") + sprint + "."
+  return scope === "current" ? "Nothing assigned to you in the current sprint." : "Nothing is assigned to you."
 }
 
 // "current" keeps stories whose sprint contains today. Anything else, including
@@ -1049,10 +1127,12 @@ var SETTINGS = [
   ]},
   { title: "Stories", rows: [
     { key: "defaultMode", kind: "choice", label: "Opens on", fallback: "compose",
-      options: [{ value: "compose", label: "New story" }, { value: "mine", label: "My stories" }] },
+      options: [{ value: "compose", label: "New story" }, { value: "mine", label: "Stories" }] },
     { key: "listScope", kind: "choice", label: "Show", fallback: "all",
-      options: [{ value: "all", label: "Everything assigned to me" },
-                { value: "current", label: "The current sprint" }] }
+      options: [{ value: "all", label: "Everything" },
+                { value: "current", label: "The current sprint" }] },
+    { key: "listOwner", kind: "picker", source: "listOwners", label: "Whose", fallback: "me",
+      hint: "Your team and teammates need a default team" }
   ]},
   { title: "Solve", rows: [
     { key: "solveWorkspace", kind: "picker", source: "workspaces", label: "Workspace", fallback: "",
@@ -1132,6 +1212,10 @@ function settingOptions(row, refs, todayIso, groupId, workspaces) {
     return spaces
   }
   if (row.source === "teams") return groupOptions(refs)
+  if (row.source === "listOwners") {
+    var owners = listOwnerOptions(refs, groupId)
+    return owners.length ? owners : [{ value: "me", label: "Me" }]
+  }
   if (row.source === "members") {
     var people = [{ value: "", label: "Unassigned" }, { value: "me", label: "Me" }]
     var meId = refs && refs.me ? str(refs.me.id) : ""
@@ -1962,6 +2046,9 @@ if (typeof module !== "undefined") {
     ownerChips: ownerChips, ownerAddOptions: ownerAddOptions,
     fileList: fileList, addFiles: addFiles, removeFile: removeFile, withScreenshots: withScreenshots,
     composeEscape: composeEscape, cameFrom: cameFrom, settingsBack: settingsBack, panelTitle: panelTitle,
+    listOwnerOptions: listOwnerOptions, resolveListOwner: resolveListOwner,
+    listOwnerArgs: listOwnerArgs, ownerNames: ownerNames, emptyListText: emptyListText,
+    loadingListText: loadingListText, loaderFrame: loaderFrame,
     storyRows: storyRows, themeColors: themeColors, sectionColor: sectionColor,
     storyTypeColor: storyTypeColor, linkChips: linkChips,
     moveNotice: moveNotice, movedBackNotice: movedBackNotice, keyHelp: keyHelp,

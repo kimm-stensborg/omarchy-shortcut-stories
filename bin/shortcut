@@ -12,9 +12,10 @@
 #   shortcut paste             save an image on the clipboard for a story, if there is one
 #   shortcut update <id>       read one JSON object on stdin and rewrite the story with it
 #   shortcut pr <url>          read a GitHub pull request (title, body, url) for the form
-#   shortcut mine [--limit N] [--done-in ID,...]
-#                              the stories assigned to you that are not done, plus
-#                              the finished ones in the given iterations
+#   shortcut mine [--limit N] [--done-in ID,...] [--owner ID | --team ID]
+#                              the stories assigned to you (or to that member, or
+#                              on that team) that are not done, plus the
+#                              finished ones in the given iterations
 #   shortcut move <id> <state> move a story to another workflow state
 #   shortcut show <id>         one story in full: description, tasks and comments
 #
@@ -110,6 +111,9 @@ cache_age() {
   [[ -s $REFS_FILE ]] || { echo -1; return; }
   local stamp; stamp=$(jq -r '.fetchedAt // 0' "$REFS_FILE" 2>/dev/null)
   [[ $stamp =~ ^[0-9]+$ ]] || { echo -1; return; }
+  # A cache written before teams carried their members cannot fill the
+  # teammate picker, so it counts as expired rather than hiding it for hours.
+  jq -e '(.groups // []) | all(has("memberIds"))' "$REFS_FILE" >/dev/null 2>&1 || { echo -1; return; }
   echo $(( $(now) - stamp ))
 }
 
@@ -118,8 +122,9 @@ demo_refs() {
     ok: true, fetchedAt: $now, stale: false, partial: [],
     me: {id: "demo-me", name: "Demo User", mentionName: "demo"},
     groups: [
-      {id: "demo-team-1", name: "Platform", defaultWorkflowId: 500, workflowIds: [500]},
-      {id: "demo-team-2", name: "Design", defaultWorkflowId: 501, workflowIds: [501]}
+      {id: "demo-team-1", name: "Platform", defaultWorkflowId: 500, workflowIds: [500],
+       memberIds: ["demo-me", "demo-ada"]},
+      {id: "demo-team-2", name: "Design", defaultWorkflowId: 501, workflowIds: [501], memberIds: []}
     ],
     workflows: [
       {id: 500, name: "Engineering", defaultStateId: 5002, states: [
@@ -160,7 +165,8 @@ merge_refs() {
       groups: ($groups[0] // [] | map(select(.archived != true))
         | map({id: .id, name: .name,
                defaultWorkflowId: .default_workflow_id,
-               workflowIds: (.workflow_ids // [])})),
+               workflowIds: (.workflow_ids // []),
+               memberIds: (.member_ids // [])})),
       workflows: ($workflows[0] // []
         | map({id: .id, name: .name, defaultStateId: .default_state_id,
                states: ((.states // []) | sort_by(.position)
@@ -477,9 +483,17 @@ story_summary='{
 # member UUID and the fixed state-type enum, so nothing here can be broken by a
 # mention name with a dot in it or by a change to the operator grammar.
 cmd_mine() {
-  local limit=50 done_in=""
+  local limit=50 done_in="" owner="" team=""
   while [[ $# -gt 0 ]]; do
     case $1 in
+      --owner)
+        owner=${2:-}
+        [[ $owner =~ ^[A-Za-z0-9-]+$ ]] || fail "--owner needs a member id" usage
+        shift 2 ;;
+      --team)
+        team=${2:-}
+        [[ $team =~ ^[A-Za-z0-9-]+$ ]] || fail "--team needs a team id" usage
+        shift 2 ;;
       --limit)
         limit=${2:-50}
         [[ $limit =~ ^[0-9]+$ ]] || fail "--limit needs a number" usage
@@ -510,8 +524,14 @@ cmd_mine() {
   local me; me=$(jq -r '.id // empty' "$WORK/member")
   [[ -n $me ]] || fail "Shortcut did not say who you are" http
 
-  jq -cn --arg owner "$me" --argjson types "$OPEN_STATE_TYPES" \
-    '{owner_id: $owner, workflow_state_types: $types, archived: false}' >"$WORK/query.json"
+  # Whose stories: yours unless a member or a team is named. A team is every
+  # story on it, whoever owns it -- including nobody.
+  local who
+  if [[ -n $team ]]; then who=$(jq -cn --arg id "$team" '{group_id: $id}')
+  else who=$(jq -cn --arg id "${owner:-$me}" '{owner_id: $id}'); fi
+
+  jq -cn --argjson who "$who" --argjson types "$OPEN_STATE_TYPES" \
+    '$who + {workflow_state_types: $types, archived: false}' >"$WORK/query.json"
 
   status=$(api POST "/stories/search" "$WORK/mine" "$WORK/query.json")
   check_status "$status" "$WORK/mine" "Searching your stories"
@@ -520,8 +540,8 @@ cmd_mine() {
   # outside the limit and the count: it is there to look back at, not to do.
   echo '[]' >"$WORK/done"
   if [[ -n $done_in ]]; then
-    jq -cn --arg owner "$me" --arg ids "$done_in" \
-      '{owner_id: $owner, workflow_state_types: ["done"],
+    jq -cn --argjson who "$who" --arg ids "$done_in" \
+      '$who + {workflow_state_types: ["done"],
         iteration_ids: ($ids | split(",") | map(tonumber)), archived: false}' >"$WORK/done-query.json"
     status=$(api POST "/stories/search" "$WORK/done" "$WORK/done-query.json")
     check_status "$status" "$WORK/done" "Searching your finished stories"

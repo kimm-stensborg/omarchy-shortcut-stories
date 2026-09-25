@@ -153,16 +153,62 @@ Item {
 
   // ---- Stories.
 
-  function refreshStories() {
-    if (storiesProc.running || !root.configLoaded) return
-    root.loadingStories = true
-    // The finished stories of the current sprint come along too, for the
-    // Done section that scope shows. Before refs there is no sprint to name.
+  // The finished stories of the current sprint come along too, for the
+  // Done section that scope shows. Before refs there is no sprint to name.
+  function doneInArgs() {
     var today = new Date().toISOString().slice(0, 10)
     var sprints = Model.currentIterations(root.refs, today).map(function(it) { return String(it.id) })
-    storiesProc.command = sprints.length
-      ? [root.cli, "mine", "--done-in", sprints.join(",")] : [root.cli, "mine"]
+    return sprints.length ? ["--done-in", sprints.join(",")] : []
+  }
+
+  function refreshStories() {
+    if (root.panelOpen) root.refreshOthers()
+    if (storiesProc.running || !root.configLoaded) return
+    root.loadingStories = true
+    storiesProc.command = [root.cli, "mine"].concat(root.doneInArgs())
     storiesProc.running = true
+  }
+
+  // ---- Someone else's stories.
+  //
+  // A teammate's list, or the whole team's, is kept apart from yours. The
+  // count in the bar, the unseen badge and the "assigned to you" notification
+  // all read root.stories, and none of them is about anyone else's work. It
+  // is only fetched while the panel is open, where it is looked at.
+
+  readonly property string teamId: Model.resolveTeamSetting(root.refs, Model.readSetting(root.settings, "defaultTeam"))
+  readonly property string listOwner: Model.resolveListOwner(root.refs, Model.readSetting(root.settings, "listOwner"), root.teamId)
+  property var otherStories: []
+  // Whose otherStories are, so a list fetched for one teammate is never shown
+  // as another's while the next one loads.
+  property string otherFor: ""
+  property string othersFetching: ""
+  property bool othersAgain: false
+
+  onListOwnerChanged: root.refreshOthers()
+
+  function refreshOthers() {
+    if (!root.configLoaded || !root.refs) return
+    if (root.listOwner === "me") { root.otherStories = []; root.otherFor = ""; return }
+    if (othersProc.running) { root.othersAgain = true; return }
+    root.othersFetching = root.listOwner
+    othersProc.command = [root.cli, "mine", "--limit", "200"]
+      .concat(Model.listOwnerArgs(root.listOwner, root.teamId), root.doneInArgs())
+    othersProc.running = true
+  }
+
+  function takeOthers(text) {
+    var parsed = parse(text)
+    if (parsed && parsed.ok && root.othersFetching === root.listOwner) {
+      root.otherStories = parsed.stories || []
+      root.otherFor = root.othersFetching
+    } else if (parsed && !parsed.ok) {
+      root.failure = parsed
+    }
+    if (root.othersAgain || root.othersFetching !== root.listOwner) {
+      root.othersAgain = false
+      Qt.callLater(root.refreshOthers)
+    }
   }
 
   function takeStories(text) {
@@ -347,6 +393,7 @@ Item {
       root.detail = next
     }
     root.stories = Model.applyUpdate(root.stories, story)
+    root.otherStories = Model.applyUpdate(root.otherStories, story)
     // Same reasoning as takeCreate: the search index trails the write.
     catchUpTimer.restart()
   }
@@ -375,6 +422,7 @@ Item {
     // Optimistic: the row moves now and is put back if Shortcut disagrees.
     root.pendingMove = { id: storyId, before: before, after: stateId, undoing: !!undoing }
     root.stories = Model.applyMove(root.stories, storyId, stateId)
+    root.otherStories = Model.applyMove(root.otherStories, storyId, stateId)
     moveProc.command = [root.cli, "move", String(storyId), String(stateId)]
     moveProc.running = true
   }
@@ -454,8 +502,10 @@ Item {
   }
 
   function storyStateOf(storyId) {
-    for (var i = 0; i < root.stories.length; i++)
-      if (root.stories[i].id === storyId) return root.stories[i].workflowStateId
+    var lists = [root.stories, root.otherStories]
+    for (var l = 0; l < lists.length; l++)
+      for (var i = 0; i < lists[l].length; i++)
+        if (lists[l][i].id === storyId) return lists[l][i].workflowStateId
     return null
   }
 
@@ -484,8 +534,10 @@ Item {
       }
       catchUpTimer.restart()
     } else {
-      if (root.pendingMove && root.pendingMove.before !== null)
+      if (root.pendingMove && root.pendingMove.before !== null) {
         root.stories = Model.applyMove(root.stories, root.pendingMove.id, root.pendingMove.before)
+        root.otherStories = Model.applyMove(root.otherStories, root.pendingMove.id, root.pendingMove.before)
+      }
       root.pendingMove = null
       root.actionError = parsed && parsed.error ? parsed.error : "bin/shortcut gave no answer"
     }
@@ -746,7 +798,10 @@ Item {
       })
   }
 
-  onPanelOpenChanged: root.ackOpenStory()
+  onPanelOpenChanged: {
+    root.ackOpenStory()
+    if (root.panelOpen) root.refreshOthers()
+  }
   onDetailForChanged: root.ackOpenStory()
   onSolveAckedChanged: root.publishStatus()
 
@@ -819,7 +874,7 @@ Item {
       unseen = Model.unseenCount(root.stories, root.seenIds)
       root.tellNewlyAssigned()
     }
-    // The number beside the icon is the number on My stories, so it follows
+    // The number beside the icon is the number on Stories, so it follows
     // the same filter the list is using.
     var today = new Date().toISOString().slice(0, 10)
     var scope = Model.readSetting(root.settings, "listScope")
@@ -923,6 +978,12 @@ Item {
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.takeStories(text) }
   }
 
+  Process {
+    id: othersProc
+    environment: root.cliEnvironment
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.takeOthers(text) }
+  }
+
   // gh speaks to GitHub; this process never sees the Shortcut token. The URL
   // is argv rather than stdin because it is a single short string with no
   // quotes to protect, and the panel never puts a secret there.
@@ -1021,6 +1082,8 @@ Item {
     root.notifyBaselined = false
     root.refs = null
     root.stories = []
+    root.otherStories = []
+    root.otherFor = ""
     root.refreshRefs(true)
   }
 

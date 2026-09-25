@@ -79,7 +79,7 @@ cat >"$WORK/routes.json" <<'JSON'
 {
   "GET /api/v3/member": [200, {"id": "me-uuid", "name": "Kimm Stensborg", "mention_name": "kimm"}],
   "GET /api/v3/groups": [200, [
-    {"id": "g1", "name": "Platform", "archived": false, "default_workflow_id": 500, "workflow_ids": [500]},
+    {"id": "g1", "name": "Platform", "archived": false, "default_workflow_id": 500, "workflow_ids": [500], "member_ids": ["me-uuid", "ada-uuid"]},
     {"id": "g2", "name": "Design", "archived": false, "default_workflow_id": 501, "workflow_ids": [501]},
     {"id": "g3", "name": "Old Team", "archived": true, "default_workflow_id": 500, "workflow_ids": [500]}
   ]],
@@ -182,6 +182,16 @@ reset_log
 SHORTCUT_REFS_TTL=0 s refs >/dev/null
 SHORTCUT_REFS_TTL=0 s refs >/dev/null
 is "an expired cache refetches" "$(log | grep -c 'GET /api/v3/')" "10"
+
+out=$(s refs)
+is "a team carries its members"   "$(jq -c '.groups[0].memberIds' <<<"$out")" '["me-uuid","ada-uuid"]'
+is "and none is an empty list"    "$(jq -c '.groups[1].memberIds' <<<"$out")" '[]'
+reset_log
+s refs >/dev/null
+cache=$(ls "$WORK"/cache/*/refs.json 2>/dev/null | head -1)
+jq -c '.groups |= map(del(.memberIds))' "$cache" >"$cache.tmp" && mv "$cache.tmp" "$cache"
+s refs >/dev/null
+is "a cache from before members refetches" "$(log | grep -c 'GET /api/v3/groups')" "2"
 
 # Losing a picker endpoint is noted, not fatal.
 reset_log
@@ -495,6 +505,18 @@ s mine >/dev/null
 is "without it there is one search" "$(log | grep -c 'POST /api/v3/stories/search')" "1"
 out=$(s mine --done-in soon)
 is "junk ids are refused"           "$(jq -r .code <<<"$out")" "usage"
+
+reset_log
+s mine --owner ada-uuid --done-in 42 >/dev/null
+bodies=$(log | sed -n 's/.*body=//p')
+is "--owner asks for that member"   "$(jq -rs '[.[].owner_id] | unique | join(",")' <<<"$bodies")" "ada-uuid"
+reset_log
+s mine --team g1 --done-in 42 >/dev/null
+bodies=$(log | sed -n 's/.*body=//p')
+is "--team asks for the team"       "$(jq -rs '[.[].group_id] | unique | join(",")' <<<"$bodies")" "g1"
+is "and not for an owner"           "$(jq -rs '[.[] | select(has("owner_id"))] | length' <<<"$bodies")" "0"
+out=$(s mine --owner "a b")
+is "a junk member is refused"       "$(jq -r .code <<<"$out")" "usage"
 
 # ---- move ----------------------------------------------------------------
 echo "move"
@@ -970,6 +992,12 @@ for f in "$DIR"/*.qml; do
 done
 is "every singleton used is imported" "${missing:- none}" " none"
 
+# qmllint passes a root object that handles the same signal twice, but the
+# shell refuses to load it ("Property value set multiple times"), and the
+# whole service goes with it.
+twice=$(for f in *.qml; do grep -oE '^  on[A-Z][A-Za-z]*:' "$f" | sort | uniq -d | sed "s|^|$f |"; done)
+is "no root handler is set twice" "${twice:- none}" " none"
+
 # The entry points the manifest promises have to be on disk, or the plugin is
 # refused at load with no other clue why.
 for entry in $(jq -r '.entryPoints[]' "$DIR/manifest.json"); do
@@ -1310,6 +1338,29 @@ const cases = [
   ["or to the story that was open",       M.cameFrom("mine", 1234).storyId, 1234],
   ["or to the settings",                  M.cameFrom("settings", 1234).storyId, 0],
   ["opened straight onto the form, nowhere", M.cameFrom("compose", 0), null],
+  ["no default team, no one else to pick", M.listOwnerOptions(refs, "").length, 0],
+  ["with one, you, the team, then teammates",
+    M.listOwnerOptions({...refs, groups: [{id: "g1", name: "Platform", memberIds: ["me-uuid", "ada-uuid"]}]}, "g1")
+      .map(o => o.label).join(","), "Me,Platform,Ada Lovelace"],
+  ["a teammate on the team is kept",
+    M.resolveListOwner({...refs, groups: [{id: "g1", name: "Platform", memberIds: ["ada-uuid"]}]}, "ada-uuid", "g1"), "ada-uuid"],
+  ["one who is not falls back to you",
+    M.resolveListOwner({...refs, groups: [{id: "g1", name: "Platform", memberIds: []}]}, "ada-uuid", "g1"), "me"],
+  ["and so does the team with no team set", M.resolveListOwner(refs, "team", ""), "me"],
+  ["the team is asked for by id",       M.listOwnerArgs("team", "g1").join(" "), "--team g1"],
+  ["a teammate by member id",           M.listOwnerArgs("ada-uuid", "g1").join(" "), "--owner ada-uuid"],
+  ["you need no arguments",             M.listOwnerArgs("me", "g1").length, 0],
+  ["owners by first name",              M.ownerNames(refs, ["ada-uuid", "me-uuid"]), "Ada, Kimm"],
+  ["nobody reads as unassigned",        M.ownerNames(refs, []), "Unassigned"],
+  ["an empty teammate list names them", M.emptyListText("ada-uuid", "Ada Lovelace", "current"), "Nothing assigned to Ada Lovelace in the current sprint."],
+  ["the scanner starts at the left",   M.loaderFrame(0, 6), "[█·····]"],
+  ["and trails as it goes right",     M.loaderFrame(3, 6), "[░▒▓█··]"],
+  ["turns at the far end",            M.loaderFrame(5, 6), "[··░▒▓█]"],
+  ["and trails the other way back",   M.loaderFrame(7, 6), "[···█▓▒]"],
+  ["every frame is the same width",   new Set(Array.from({length: 40}, (_, i) => M.loaderFrame(i, 18).length)).size, 1],
+  ["loading names the team",           M.loadingListText("team", "Technology"), "Reading Technology's stories..."],
+  ["and yours is yours",               M.loadingListText("me", "Me"), "Reading your stories..."],
+  ["an empty team list names the team", M.emptyListText("team", "Platform", "all"), "Nothing open on Platform."],
   ["the title is the list",            M.panelTitle({mode: "mine"}), "Stories"],
   ["a new story",                      M.panelTitle({mode: "compose"}), "New story"],
   ["an open story, by reference",      M.panelTitle({mode: "mine", storyId: 1234}), "Story sc-1234"],

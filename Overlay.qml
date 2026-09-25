@@ -607,7 +607,7 @@ Item {
               Repeater {
                 model: [
                   { id: "compose", label: "New story" },
-                  { id: "mine", label: "My stories" }
+                  { id: "mine", label: "Stories" }
                 ]
                 Button {
                   required property var modelData

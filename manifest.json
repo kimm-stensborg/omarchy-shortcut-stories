@@ -102,6 +102,12 @@
         "defaultValue": "all"
       },
       {
+        "key": "listOwner",
+        "type": "string",
+        "label": "Whose stories the list shows ('me', 'team', or a teammate's member id)",
+        "defaultValue": "me"
+      },
+      {
         "key": "solveWorkspace",
         "type": "string",
         "label": "Herdr workspace Solve starts in (a workspace name, or empty to ask each time)",

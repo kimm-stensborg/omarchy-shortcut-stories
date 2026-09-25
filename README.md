@@ -54,7 +54,7 @@ To put the count in the bar as well:
 omarchy bar put io.github.kimm-stensborg.shortcut-stories --section right
 ```
 
-The number beside the icon is the same one as **My stories**, so it follows
+The number beside the icon is the same one as **Stories**, so it follows
 the list filter. The icon carries a small badge when a story has been
 assigned to you since you last opened it. Opening the story clears that one.
 The stories already assigned the first time the plugin looks are not new, so
@@ -151,17 +151,26 @@ A spot is never off the screen: on a smaller one it is pulled back in.
 | `Ctrl + ,` | Settings. |
 | `Ctrl + R` | Re-read your workspace and your stories. |
 | `Alt + I` | In the list, only the sprint today falls inside. Again shows everything. |
+| `Alt + O` | In the list, whose stories: you, your default team, or a teammate on it. |
 | `Esc` | Closes a dropdown first. On a new story with something in it, warns, then cancels it and goes back to where you started it. Elsewhere it goes back a step, then closes the panel. |
 | `?` or `F1` | Every key, on a card over the panel. `?` where you are not typing, `F1` anywhere. |
 | drag the header | Moves the panel, onto another monitor too. Double-click puts it back in the middle. |
 
-In **My stories**: `↑` `↓` walk the list, `Enter` (or a click) opens the story,
+In **Stories**: `↑` `↓` walk the list, `Enter` (or a click) opens the story,
 and `Ctrl + O` opens it in your browser. **All** and the current sprint sit
 above the list. `Alt + I`, or a click, switches between them. The sprint is
 whichever one today falls inside. Where more than one does, the list shows
 all of them, and the button says so. A story with no sprint is not in that
 list. The sprint also lists what you have finished in it, in a Done section
 at the bottom; **All** leaves finished stories out. The choice is remembered.
+
+With a **Team** set in the settings, a picker on the right of the same row
+(`Alt + O`) shows someone else's stories: the whole team's, or one teammate's.
+It starts on **Me**. The team's list names who each story belongs to, and one
+nobody owns says so. Everything else works the same on their stories --
+moving, editing, Solve -- and the number in the bar, the unseen badge and the
+"assigned to you" notification stay about yours alone. With no team set,
+the picker is not there.
 
 In an **open story**: `←` `→` pick a state and `Enter` moves it there,
 `Ctrl + O` opens it in Shortcut, `Ctrl + G` opens its pull request on
@@ -386,9 +395,10 @@ rather than going stale when this one ends.
 | Owner | Me | Who a new story starts assigned to; more can be added on the form |
 | Type | Feature | What a new story starts as |
 | Keep team and iteration after filing | on | Leaves them set for the next story |
-| Next to the glyph | Open stories | The same number as My stories, or how many of those are in progress |
+| Next to the glyph | Open stories | The same number as Stories, or how many of those are in progress |
 | Opens on | New story | Which pane the keybinding lands on |
-| Show | Everything assigned to me | The list, or only the sprint today falls inside |
+| Show | Everything | The list, or only the sprint today falls inside |
+| Whose | Me | Your stories, your default team's, or a teammate's on it. Needs a Team |
 | Workspace | Ask each time | The Herdr workspace Solve starts in |
 | In a worktree | off | Solve checks the story out beside the repo, on `sc-<id>` |
 | Agent | Grok | Which coding agent Solve starts |
