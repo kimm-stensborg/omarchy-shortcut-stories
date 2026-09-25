@@ -163,6 +163,11 @@ whichever one today falls inside. Where more than one does, the list shows
 all of them, and the button says so. A story with no sprint is not in that
 list. The sprint also lists what you have finished in it, in a Done section
 at the bottom; **All** leaves finished stories out. The choice is remembered.
+Each half of the filter says how many open stories it holds, and each
+heading how many sit in that state. A long list -- a whole team's, say -- is
+drawn a hundred stories at a time, and the next hundred come in as you reach
+the bottom, by scrolling or with `↓`. A scrollbar shows while the list moves,
+and fades when it stops.
 
 With a **Team** set in the settings, a picker on the right of the same row
 (`Alt + O`) shows someone else's stories: the whole team's, or one teammate's.

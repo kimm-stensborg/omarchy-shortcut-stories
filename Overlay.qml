@@ -683,6 +683,24 @@ Item {
               font.pixelSize: Style.font.caption
               text: root.footerText
             }
+
+            // At the far right while the list draws its next page.
+            Text {
+              id: pageSpinner
+              property int tick: 0
+              readonly property bool spinning: !!(paneLoader.item && paneLoader.item.pageLoading)
+              visible: pageSpinner.spinning
+              text: Model.spinnerFrame(pageSpinner.tick) + " loading more"
+              color: root.accent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              Timer {
+                interval: 80
+                repeat: true
+                running: pageSpinner.spinning
+                onTriggered: pageSpinner.tick++
+              }
+            }
           }
         }
 

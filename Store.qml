@@ -165,7 +165,7 @@ Item {
     if (root.panelOpen) root.refreshOthers()
     if (storiesProc.running || !root.configLoaded) return
     root.loadingStories = true
-    storiesProc.command = [root.cli, "mine"].concat(root.doneInArgs())
+    storiesProc.command = [root.cli, "mine", "--limit", "1000"].concat(root.doneInArgs())
     storiesProc.running = true
   }
 
@@ -179,6 +179,9 @@ Item {
   readonly property string teamId: Model.resolveTeamSetting(root.refs, Model.readSetting(root.settings, "defaultTeam"))
   readonly property string listOwner: Model.resolveListOwner(root.refs, Model.readSetting(root.settings, "listOwner"), root.teamId)
   property var otherStories: []
+  // How many open stories Shortcut has for each list, past the limit too.
+  property int storiesTotal: 0
+  property int otherTotal: 0
   // Whose otherStories are, so a list fetched for one teammate is never shown
   // as another's while the next one loads.
   property string otherFor: ""
@@ -192,7 +195,7 @@ Item {
     if (root.listOwner === "me") { root.otherStories = []; root.otherFor = ""; return }
     if (othersProc.running) { root.othersAgain = true; return }
     root.othersFetching = root.listOwner
-    othersProc.command = [root.cli, "mine", "--limit", "200"]
+    othersProc.command = [root.cli, "mine", "--limit", "1000"]
       .concat(Model.listOwnerArgs(root.listOwner, root.teamId), root.doneInArgs())
     othersProc.running = true
   }
@@ -201,6 +204,7 @@ Item {
     var parsed = parse(text)
     if (parsed && parsed.ok && root.othersFetching === root.listOwner) {
       root.otherStories = parsed.stories || []
+      root.otherTotal = parsed.total || 0
       root.otherFor = root.othersFetching
     } else if (parsed && !parsed.ok) {
       root.failure = parsed
@@ -217,6 +221,7 @@ Item {
     if (parsed && parsed.ok) {
       root.storiesKnown = true
       root.stories = parsed.stories || []
+      root.storiesTotal = parsed.total || 0
       root.failure = null
       root.publishStatus()
     } else if (parsed) {

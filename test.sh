@@ -1358,6 +1358,14 @@ const cases = [
   ["turns at the far end",            M.loaderFrame(5, 6), "[··░▒▓█]"],
   ["and trails the other way back",   M.loaderFrame(7, 6), "[···█▓▒]"],
   ["every frame is the same width",   new Set(Array.from({length: 40}, (_, i) => M.loaderFrame(i, 18).length)).size, 1],
+  ["the spinner turns",               M.spinnerFrame(0) !== M.spinnerFrame(1), true],
+  ["and comes round again",           M.spinnerFrame(10), M.spinnerFrame(0)],
+  ["a page stops at its nth story",
+    M.firstStories([{kind: "header"}, {kind: "story"}, {kind: "story"}, {kind: "header"}, {kind: "story"}], 2).length, 3],
+  ["a heading with nothing under it yet is left for the next page",
+    M.firstStories([{kind: "header"}, {kind: "story"}, {kind: "header"}, {kind: "story"}], 1).length, 2],
+  ["a short list is all there",
+    M.firstStories([{kind: "header"}, {kind: "story"}], 100).length, 2],
   ["loading names the team",           M.loadingListText("team", "Technology"), "Reading Technology's stories..."],
   ["and yours is yours",               M.loadingListText("me", "Me"), "Reading your stories..."],
   ["an empty team list names the team", M.emptyListText("team", "Platform", "all"), "Nothing open on Platform."],
@@ -1470,9 +1478,9 @@ cases.push(
   ["a theme without the colour falls back", M.sectionColor("done", {}, "grey"), "grey"],
   ["a bug is red",                    M.storyTypeColor("bug", {red: "#f00"}, "grey"), "#f00"],
   ["a header row knows its kind and state",
-    JSON.stringify((({type, kindTitle, state, first}) => ({type, kindTitle, state, first}))(
-      M.storyRows(M.sectionStories([{id: 1, workflowStateId: 7002}], prRefs, false))[0])),
-    '{"type":"started","kindTitle":"In progress","state":"In Development","first":true}'],
+    JSON.stringify((({type, kindTitle, state, count, first}) => ({type, kindTitle, state, count, first}))(
+      M.storyRows(M.sectionStories([{id: 1, workflowStateId: 7002}, {id: 2, workflowStateId: 7002}], prRefs, false))[0])),
+    '{"type":"started","kindTitle":"In progress","state":"In Development","count":2,"first":true}'],
   ["so no row repeats it",
     M.storyRows(M.sectionStories([{id: 1, workflowStateId: 7002}, {id: 2, workflowStateId: 7003}], prRefs, false))
       .filter(r => r.kind === "story" && r.showState).length, 0],

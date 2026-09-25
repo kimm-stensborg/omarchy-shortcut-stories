@@ -945,6 +945,26 @@ function loaderFrame(tick, width) {
   return "[" + cells.join("") + "]"
 }
 
+// A small spinner, for the corner while the next page comes in.
+var SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+function spinnerFrame(tick) {
+  var n = SPINNER.length
+  return SPINNER[((tick % n) + n) % n]
+}
+
+// The rows up to and including the nth story, for a list drawn a page at a
+// time. A heading is only kept when a story under it made the cut.
+function firstStories(rows, n) {
+  var out = []
+  var seen = 0
+  for (var i = 0; i < (rows || []).length && seen < n; i++) {
+    out.push(rows[i])
+    if (rows[i].kind === "story") seen++
+  }
+  while (out.length && out[out.length - 1].kind !== "story") out.pop()
+  return out
+}
+
 // What the list says while it is being read, naming whose it is.
 function loadingListText(owner, ownerLabel) {
   if (owner && owner !== "me" && str(ownerLabel)) return "Reading " + str(ownerLabel) + "'s stories..."
@@ -1047,7 +1067,7 @@ function storyRows(sections) {
     var section = sections[i]
     out.push({ kind: "header", title: section.heading, story: null, showState: false,
                type: section.type, kindTitle: section.title, state: section.commonState,
-               first: i === 0 })
+               count: section.stories.length, first: i === 0 })
     for (var j = 0; j < section.stories.length; j++) {
       var story = section.stories[j]
       out.push({ kind: "story", title: "", story: story,
@@ -2048,7 +2068,7 @@ if (typeof module !== "undefined") {
     composeEscape: composeEscape, cameFrom: cameFrom, settingsBack: settingsBack, panelTitle: panelTitle,
     listOwnerOptions: listOwnerOptions, resolveListOwner: resolveListOwner,
     listOwnerArgs: listOwnerArgs, ownerNames: ownerNames, emptyListText: emptyListText,
-    loadingListText: loadingListText, loaderFrame: loaderFrame,
+    loadingListText: loadingListText, loaderFrame: loaderFrame, firstStories: firstStories, spinnerFrame: spinnerFrame,
     storyRows: storyRows, themeColors: themeColors, sectionColor: sectionColor,
     storyTypeColor: storyTypeColor, linkChips: linkChips,
     moveNotice: moveNotice, movedBackNotice: movedBackNotice, keyHelp: keyHelp,

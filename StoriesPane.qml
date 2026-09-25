@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Controls as Controls
 import Quickshell
 import qs.Commons
 import qs.Ui
@@ -37,14 +38,58 @@ Item {
 
   // The sections flattened into rows, because a ListView wants one model and
   // the headers have to be walked past by the cursor anyway.
-  readonly property var scopedStories: Model.storiesInScope(
-    !pane.store ? [] : (pane.others ? (pane.othersReady ? pane.store.otherStories : []) : pane.store.stories),
-    pane.refs, pane.scope, pane.today)
+  readonly property var listedStories: !pane.store ? []
+    : (pane.others ? (pane.othersReady ? pane.store.otherStories : []) : pane.store.stories)
+  readonly property var scopedStories: Model.storiesInScope(pane.listedStories, pane.refs, pane.scope, pane.today)
+
+  // How many open stories each half of the filter holds, on the filter itself,
+  // so the size of a list is known before scrolling it.
+  readonly property string allCount: String(Math.max(Model.openCount(pane.listedStories, pane.refs),
+    !pane.store ? 0 : (pane.others ? pane.store.otherTotal : pane.store.storiesTotal)))
+  readonly property string sprintCount: String(Model.openCount(
+    Model.storiesInScope(pane.listedStories, pane.refs, "current", pane.today), pane.refs))
 
   // What you finished only reads as progress against a sprint. Across
   // everything assigned to you it is just a pile that keeps growing.
-  readonly property var rows: Model.storyRows(
+  readonly property var allRows: Model.storyRows(
     Model.sectionStories(pane.scopedStories, pane.refs, pane.scope === "current"))
+
+  TextMetrics {
+    id: refWidth
+    font.family: pane.fontFamily
+    font.pixelSize: Style.font.caption
+    text: "sc-00000"
+  }
+
+  // A team's list can run to hundreds. It is all fetched at once, but drawn a
+  // page at a time: the next page lands as the list reaches its bottom.
+  readonly property int pageSize: 100
+  property int shown: pane.pageSize
+  readonly property var rows: Model.firstStories(pane.allRows, pane.shown)
+  readonly property bool hasMore: pane.rows.length < pane.allRows.length
+  // A different list starts at its top. Anything else -- the next page, a
+  // refresh underneath -- keeps you where you were.
+  property bool scrollToTop: false
+  onScopeChanged: { pane.shown = pane.pageSize; pane.scrollToTop = true }
+  onOwnerChanged: { pane.shown = pane.pageSize; pane.scrollToTop = true }
+
+  // The spinner in the footer goes up first, and the page is only drawn once
+  // a frame with it has been painted -- drawing a page holds the thread, and
+  // a spinner that appears after the pause says nothing. It then stays up
+  // long enough to be seen rather than flickering.
+  property bool pageLoading: false
+  function showMore() {
+    if (!pane.hasMore || pane.pageLoading) return
+    pane.pageLoading = true
+    pageSpinnerHold.restart()
+    pageAfterPaint.restart()
+  }
+  Timer { id: pageAfterPaint; interval: 50; onTriggered: pane.shown += pane.pageSize }
+  Timer { id: pageSpinnerHold; interval: 500; onTriggered: pane.pageLoading = false }
+
+  // How far above the bottom the next page is asked for, so it is usually
+  // there before you reach it.
+  readonly property int prefetchDistance: 200
 
   // "3 hours ago" has to move on while the panel sits open.
   property real now: Date.now() / 1000
@@ -54,7 +99,25 @@ Item {
 
   // A refresh, or narrowing to the sprint, can leave the cursor on a header
   // or past the end. Put it back on a story.
+  // The list's model is only a count: each row reads pane.rows at its index.
+  // A new page is then rows added at the end, which builds only what comes
+  // into view, and a refresh underneath changes what rows say without the
+  // list being rebuilt. Handing a ListView a whole new array instead rebuilds
+  // it from scratch -- slow for a team's list, and back at the top.
+  ListModel { id: rowSlots }
+  function syncRows() {
+    var n = pane.rows.length
+    if (rowSlots.count > n) rowSlots.remove(n, rowSlots.count - n)
+    if (rowSlots.count < n) {
+      var more = []
+      for (var i = rowSlots.count; i < n; i++) more.push({ slot: i })
+      rowSlots.append(more)
+    }
+  }
+
   onRowsChanged: {
+    pane.syncRows()
+    if (pane.scrollToTop) { pane.scrollToTop = false; list.positionViewAtBeginning() }
     if (pane.cursor >= pane.rows.length
         || (pane.rows.length && pane.rows[pane.cursor] && pane.rows[pane.cursor].kind !== "story"))
       pane.cursor = pane.firstStoryRow()
@@ -76,6 +139,9 @@ Item {
   }
 
   function moveCursor(step) {
+    // Walking off the last story drawn brings in the next page, rather than
+    // wrapping to the top of a list that does not end there.
+    if (step > 0 && pane.hasMore && pane.cursor >= pane.rows.length - 1) pane.showMore()
     var at = pane.cursor
     for (var n = 0; n < pane.rows.length; n++) {
       at = (at + step + pane.rows.length) % pane.rows.length
@@ -176,9 +242,9 @@ Item {
 
             Repeater {
               model: [
-                { value: "all", label: "All", enabled: true },
+                { value: "all", label: "All", count: pane.allCount, enabled: true },
                 { value: "current", label: pane.sprintLabel !== "" ? pane.sprintLabel : "No current sprint",
-                  enabled: pane.sprintLabel !== "" }
+                  count: pane.sprintCount, enabled: pane.sprintLabel !== "" }
               ]
               delegate: Rectangle {
                 id: segment
@@ -190,14 +256,31 @@ Item {
                 color: segment.chosen ? Style.selectionFillFor(pane.foreground, pane.accent)
                   : (segmentMouse.containsMouse && modelData.enabled ? Style.hoverFill : "transparent")
 
-                Text {
+                Row {
                   id: segmentText
                   anchors.centerIn: parent
-                  text: segment.modelData.label
-                  color: segment.chosen ? pane.accent : pane.muted
+                  spacing: Style.spacing.md
                   opacity: segment.modelData.enabled ? 1 : 0.5
-                  font.family: pane.fontFamily
-                  font.pixelSize: Style.font.body
+
+                  Text {
+                    text: segment.modelData.label
+                    color: segment.chosen ? pane.accent : pane.muted
+                    font.family: pane.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: segment.chosen
+                  }
+
+                  // The same size and colour as its label, only softer, so it
+                  // reads as part of it. Hidden until the list has been read:
+                  // a 0 that is really "not yet" would be a lie.
+                  Text {
+                    visible: segment.modelData.enabled && !pane.loading && !!pane.refs
+                    text: segment.modelData.count
+                    color: segment.chosen ? pane.accent : pane.muted
+                    opacity: 0.7
+                    font.family: pane.fontFamily
+                    font.pixelSize: Style.font.body
+                  }
                 }
 
                 MouseArea {
@@ -280,17 +363,39 @@ Item {
           anchors.fill: parent
           visible: pane.rows.length > 0
           clip: true
-          model: pane.rows
+          model: rowSlots
+          Component.onCompleted: pane.syncRows()
           spacing: Style.spacing.xs
           boundsBehavior: Flickable.StopAtBounds
+          onContentYChanged: {
+            if (pane.hasMore
+                && contentY + height >= originY + contentHeight - pane.prefetchDistance)
+              pane.showMore()
+          }
+
+          // Shown only while the list moves, so a still list stays clean and
+          // a scrolling one says how much is left.
+          Controls.ScrollBar.vertical: Controls.ScrollBar {
+            id: scrollBar
+            policy: Controls.ScrollBar.AsNeeded
+            width: Style.space(6)
+            padding: 0
+            contentItem: Rectangle {
+              implicitWidth: Style.space(4)
+              radius: width / 2
+              color: pane.muted
+              opacity: scrollBar.active ? 0.8 : 0
+              Behavior on opacity { NumberAnimation { duration: 250 } }
+            }
+            background: Item {}
+          }
 
         delegate: Loader {
           required property int index
-          required property var modelData
           width: ListView.view.width
-          sourceComponent: modelData.kind === "header" ? headerRow : storyRow
-          property var rowData: modelData
+          property var rowData: pane.rows[index] || null
           property int rowIndex: index
+          sourceComponent: !rowData ? null : (rowData.kind === "header" ? headerRow : storyRow)
         }
         }
       }
@@ -326,12 +431,20 @@ Item {
         }
 
         PanelSectionHeader {
-          Layout.fillWidth: true
+          Layout.maximumWidth: header.width - Style.space(60)
           elide: Text.ElideRight
           text: headerItem.info.title
           foreground: headerItem.tint
           color: headerItem.tint
           fontFamily: pane.fontFamily
+        }
+
+        Text {
+          Layout.fillWidth: true
+          text: String(headerItem.info.count)
+          color: pane.muted
+          font.family: pane.fontFamily
+          font.pixelSize: Style.font.caption
         }
       }
     }
@@ -384,7 +497,9 @@ Item {
             font.pixelSize: Style.font.body
           }
 
+          // As wide as the longest reference, so the titles line up.
           Text {
+            Layout.preferredWidth: refWidth.advanceWidth
             text: row.story.ref
             color: pane.muted
             font.family: pane.fontFamily
