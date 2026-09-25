@@ -141,6 +141,16 @@
         "defaultValue": "grok"
       },
       {
+        "key": "notifyAssigned",
+        "type": "enum",
+        "label": "Notify when a story is assigned to you",
+        "options": [
+          "on",
+          "off"
+        ],
+        "defaultValue": "on"
+      },
+      {
         "key": "refreshMinutes",
         "type": "integer",
         "label": "Refresh interval while closed (minutes)",

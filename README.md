@@ -60,6 +60,17 @@ assigned to you since you last opened it. Opening the story clears that one.
 The stories already assigned the first time the plugin looks are not new, so
 the badge starts clear. Hovering the icon does not list them.
 
+A story assigned to you also says so in a notification, with its name, once.
+Clicking it opens that story in the panel. It stays on screen, stacked
+with any others, until you dismiss it, and Do Not Disturb holds it back like
+any other app's. More than three at once arrive as
+one notification, which opens the list. Stories already waiting when the
+shell starts are not announced, so a restart never repeats them, and one that
+leaves your list and comes back is announced again. Nothing more is written
+to disk for this: which stories you have been told about is kept in memory.
+New stories are noticed when the list refreshes, so within **Refresh while
+closed** of being assigned.
+
 A dot under the icon means an agent Solve started wants you back: red while
 one is waiting for an answer, the accent colour when one has finished. A
 click then opens that story rather than the list. An agent counts as seen
@@ -366,6 +377,7 @@ rather than going stale when this one ends.
 | In a worktree | off | Solve checks the story out beside the repo, on `sc-<id>` |
 | Agent | Grok | Which coding agent Solve starts |
 | Refresh while closed | 5 min | How often the count is brought up to date |
+| Notify when assigned | on | A notification for each new story, as well as the badge |
 | Demo workspace | off | A made-up workspace; never calls Shortcut |
 
 ## What it stores

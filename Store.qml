@@ -784,12 +784,32 @@ Item {
     root.writeSeen()
   }
 
+  // Stories already waiting when the shell starts are not news, the same as
+  // Solve's agents: the first list only fills the notified set. After that, a
+  // story is told about once, and again only if it leaves and comes back.
+  property var notifiedIds: []
+  property bool notifyBaselined: false
+
+  function tellNewlyAssigned() {
+    var next = Model.newlyAssigned(root.stories, root.seenIds, root.notifiedIds)
+    var quiet = !root.notifyBaselined || root.demo || !Model.readSetting(root.settings, "notifyAssigned")
+    root.notifyBaselined = true
+    if (!Model.sameIds(next.notified, root.notifiedIds)) root.notifiedIds = next.notified
+    if (quiet) return
+    var notices = Model.assignedNotices(next.notify, root.pluginId)
+    // Omarchy's notifications run the notice's argv on a click, and keep it
+    // when the toast is restored after a restart.
+    for (var i = 0; i < notices.length; i++)
+      Quickshell.execDetached(Model.noticeCommand(notices[i]))
+  }
+
   function publishStatus() {
     if (!root.configLoaded) return
     var unseen = 0
     if (root.seenReady && root.storiesKnown) {
       root.remember(root.stories, [])
       unseen = Model.unseenCount(root.stories, root.seenIds)
+      root.tellNewlyAssigned()
     }
     // The number beside the icon is the number on My stories, so it follows
     // the same filter the list is using.
@@ -978,6 +998,7 @@ Item {
     // not a pile of badges for things you already had.
     root.storiesKnown = false
     root.seenBaseline = true
+    root.notifyBaselined = false
     root.refs = null
     root.stories = []
     root.refreshRefs(true)

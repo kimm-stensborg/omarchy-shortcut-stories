@@ -1015,7 +1015,8 @@ var SETTINGS = [
       options: [{ value: "none", label: "Nothing" }, { value: "count", label: "Open stories" },
                 { value: "started", label: "In progress" }] },
     { key: "refreshMinutes", kind: "number", label: "Refresh while closed (minutes)",
-      fallback: 5, min: 1, max: 60 }
+      fallback: 5, min: 1, max: 60 },
+    { key: "notifyAssigned", kind: "toggle", label: "Notify when assigned", fallback: true }
   ]},
   { title: "Shortcut", rows: [
     { key: "demo", kind: "toggle", label: "Demo workspace", fallback: false,
@@ -1380,6 +1381,67 @@ function sameIds(a, b) {
   for (var i = 0; i < left.length; i++) known[String(left[i])] = true
   for (var j = 0; j < right.length; j++) if (!known[String(right[j])]) return false
   return true
+}
+
+// ---- Telling you a story arrived.
+// A story is news once: unseen, and not told about before. The notified set is
+// kept to stories still on the list, like the seen set, so one that leaves and
+// comes back is told about again.
+
+var NOTICE_EACH_UP_TO = 3
+
+function newlyAssigned(stories, seenIds, notifiedIds) {
+  var told = {}
+  var before = notifiedIds || []
+  for (var i = 0; i < before.length; i++) told[String(before[i])] = true
+  var fresh = unseenStories(stories, seenIds).filter(function(s) { return !told[storyKey(s)] })
+  var keep = []
+  var list = stories || []
+  for (var j = 0; j < list.length; j++) {
+    var id = storyKey(list[j])
+    if (id === "") continue
+    if (told[id] || fresh.indexOf(list[j]) !== -1) keep.push(id)
+  }
+  return { notify: fresh, notified: keep }
+}
+
+// What the notification says, and what clicking it runs: the same summon the
+// bar sends. A handful at once is one notification each; more than that is one
+// for all of them, which opens the list rather than any single story.
+function assignedNotices(stories, pluginId) {
+  var list = stories || []
+  var summon = function(payload) {
+    return ["omarchy-shell", "shell", "summon", String(pluginId), JSON.stringify(payload)]
+  }
+  if (list.length > NOTICE_EACH_UP_TO) {
+    return [{ summary: list.length + " stories assigned to you",
+              body: list.slice(0, NOTICE_EACH_UP_TO).map(function(s) { return noticeText(s.name) }).join("\n") + "\n…",
+              glyph: storyGlyph("feature"),
+              argv: summon({ mode: "mine" }) }]
+  }
+  return list.map(function(s) {
+    return { summary: "Assigned to you",
+             body: "sc-" + storyKey(s) + " · " + noticeText(s.name),
+             glyph: storyGlyph(s.storyType),
+             argv: summon({ mode: "mine", story: Number(storyKey(s)) }) }
+  })
+}
+
+// The notify-send line for one notice. Critical, because it is the only
+// urgency Omarchy leaves on screen until you dismiss it: anything else is gone
+// within half a minute, and a story you were away for is exactly the one to
+// keep. Sent under the plugin's own name, so Do Not Disturb still holds it.
+function noticeCommand(notice) {
+  return ["notify-send", "-a", "Shortcut Stories", "-u", "critical",
+          "-h", "string:omarchy-exec-argv:" + JSON.stringify(notice.argv),
+          "-h", "string:omarchy-glyph:" + str(notice.glyph),
+          notice.summary, notice.body]
+}
+
+// Omarchy draws a notification body as markup, so a story called
+// "Fix <Button> padding" would lose its middle. Escaped, it reads as written.
+function noticeText(text) {
+  return str(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 }
 
 // ---- Handing a story to Herdr.
@@ -1761,6 +1823,7 @@ if (typeof module !== "undefined") {
     entryFor: entryFor, settingsSummary: settingsSummary, barLabel: barLabel,
     openCount: openCount, startedCount: startedCount,
     storyKey: storyKey, unseenStories: unseenStories, unseenCount: unseenCount,
+    newlyAssigned: newlyAssigned, assignedNotices: assignedNotices, noticeText: noticeText, noticeCommand: noticeCommand,
     noteSeen: noteSeen, seenIdsOf: seenIdsOf, sameIds: sameIds,
     settingOptions: settingOptions, resolveTeamSetting: resolveTeamSetting,
     resolveOwnerSetting: resolveOwnerSetting,
