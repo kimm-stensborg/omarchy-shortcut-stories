@@ -551,7 +551,8 @@ Item {
           // in the middle. The buttons sit above the handle and keep clicks.
           Item {
             Layout.fillWidth: true
-            implicitHeight: headerRow.implicitHeight
+            Layout.topMargin: Style.spacing.xs
+            implicitHeight: headerRow.implicitHeight + Style.spacing.sm
 
             MouseArea {
               id: handle
@@ -624,7 +625,7 @@ Item {
                     return n ? String(n) : ""
                   }
                   Layout.fillHeight: true
-                  implicitWidth: tabRow.implicitWidth + Style.spacing.md * 2
+                  implicitWidth: tabRow.implicitWidth + Style.spacing.lg * 2
                   implicitHeight: tabRow.implicitHeight
 
                   Row {

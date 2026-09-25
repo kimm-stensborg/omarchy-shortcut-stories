@@ -37,8 +37,8 @@ Item {
   readonly property color background: pane.overlay ? pane.overlay.background : Color.menu.background
 
   // The filter's pills: one height, and a colour at a given strength.
-  readonly property int pillHeight: Style.spacing.controlHeight
-  readonly property int pillInset: 3
+  readonly property int pillHeight: Style.spacing.controlHeight + Style.space(6)
+  readonly property int pillInset: 4
   function tint(c, a) { return Qt.rgba(c.r, c.g, c.b, a) }
   readonly property string fontFamily: pane.overlay ? pane.overlay.fontFamily : Style.font.menuFamily
 
@@ -52,6 +52,12 @@ Item {
   // so the size of a list is known before scrolling it.
   readonly property string allCount: String(Math.max(Model.openCount(pane.listedStories, pane.refs),
     !pane.store ? 0 : (pane.others ? pane.store.otherTotal : pane.store.storiesTotal)))
+  // What the scope pill offers. The sprint is only there when one is on.
+  readonly property var scopeOptions: {
+    var out = [{ value: "all", label: "All · " + pane.allCount }]
+    if (pane.sprintLabel !== "") out.push({ value: "current", label: pane.sprintLabel + " · " + pane.sprintCount })
+    return out
+  }
   readonly property string sprintCount: String(Model.openCount(
     Model.storiesInScope(pane.listedStories, pane.refs, "current", pane.today), pane.refs))
 
@@ -168,6 +174,7 @@ Item {
 
   function escapePressed() {
     if (ownerPicker.popupOpen) { ownerPicker.close(); keys.forceActiveFocus(); return true }
+    if (scopePicker.popupOpen) { scopePicker.close(); keys.forceActiveFocus(); return true }
     return false
   }
 
@@ -224,178 +231,40 @@ Item {
       anchors.fill: parent
       spacing: Style.spacing.sm
 
-      // The filter: which stories on the left, whose on the right. Both are
-      // soft pills of one height, no borders, so the row reads as one quiet
-      // line over the list rather than a row of form fields.
+      // The filter, on the right: which stories, then whose. Both are the
+      // same soft pill -- an icon, what is chosen, how many, a chevron -- and
+      // open the same searchable list. Whose is only there with a default
+      // team: without one there is no one else to pick.
       RowLayout {
         Layout.fillWidth: true
-        Layout.topMargin: Style.spacing.xs
+        Layout.topMargin: Style.spacing.lg
+        Layout.bottomMargin: Style.spacing.xs
         visible: !!pane.refs
         spacing: Style.spacing.md
 
-        // All and the sprint as one segmented pill: the chosen half is tinted
-        // in the accent, the other is plain text on the track.
-        Rectangle {
-          implicitWidth: scopeRow.implicitWidth + pane.pillInset * 2
-          implicitHeight: pane.pillHeight
-          radius: height / 2
-          color: pane.tint(pane.foreground, 0.06)
-
-          Row {
-            id: scopeRow
-            anchors.fill: parent
-            anchors.margins: pane.pillInset
-            spacing: pane.pillInset
-
-            Repeater {
-              model: [
-                { value: "all", label: "All", count: pane.allCount, enabled: true },
-                { value: "current", label: pane.sprintLabel !== "" ? pane.sprintLabel : "No current sprint",
-                  count: pane.sprintCount, enabled: pane.sprintLabel !== "" }
-              ]
-              delegate: Rectangle {
-                id: segment
-                required property var modelData
-                readonly property bool chosen: (pane.scope === "current") === (modelData.value === "current")
-                width: segmentText.implicitWidth + Style.spacing.controlPaddingX * 2
-                height: scopeRow.height
-                radius: height / 2
-                color: segment.chosen ? pane.tint(pane.accent, 0.18)
-                  : (segmentMouse.containsMouse && modelData.enabled ? pane.tint(pane.foreground, 0.06) : "transparent")
-                Behavior on color { ColorAnimation { duration: 120 } }
-
-                Row {
-                  id: segmentText
-                  anchors.centerIn: parent
-                  spacing: Style.spacing.sm
-                  opacity: segment.modelData.enabled ? 1 : 0.5
-
-                  Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: segment.modelData.label
-                    color: segment.chosen ? pane.accent : pane.muted
-                    font.family: pane.fontFamily
-                    font.pixelSize: Style.font.body
-                    font.bold: segment.chosen
-                  }
-
-                  // A small badge, so the number sits beside the label rather
-                  // than running into it. Hidden until the list has been read:
-                  // a 0 that is really "not yet" would be a lie.
-                  Rectangle {
-                    anchors.verticalCenter: parent.verticalCenter
-                    visible: segment.modelData.enabled && !pane.loading && !!pane.refs
-                    implicitWidth: countText.implicitWidth + Style.spacing.md * 2
-                    implicitHeight: countText.implicitHeight + 2
-                    radius: height / 2
-                    color: segment.chosen ? pane.tint(pane.accent, 0.22) : pane.tint(pane.foreground, 0.08)
-
-                    Text {
-                      id: countText
-                      anchors.centerIn: parent
-                      text: segment.modelData.count
-                      color: segment.chosen ? pane.accent : pane.muted
-                      font.family: pane.fontFamily
-                      font.pixelSize: Style.font.caption
-                    }
-                  }
-                }
-
-                MouseArea {
-                  id: segmentMouse
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  enabled: segment.modelData.enabled
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: pane.setScope(segment.modelData.value)
-                }
-              }
-            }
-          }
-        }
-
         Item { Layout.fillWidth: true }
 
-        // Whose, as a pill to match. Only with a default team: without one
-        // there is no one else to pick. The pill is what you see; the shell's
-        // dropdown is kept for its searchable popup, in a slot of no height
-        // level with the pill, so its own box never shows but the popup --
-        // drawn on the overlay, outside any clip -- opens just under the pill,
-        // wide enough for a name.
-        Item {
+        FilterPill {
+          id: scopePicker
+          icon: pane.scope === "current" ? "\uf073" : "\uf03a"
+          label: pane.scope === "current" && pane.sprintLabel !== "" ? pane.sprintLabel : "All"
+          count: pane.loading ? "" : (pane.scope === "current" ? pane.sprintCount : pane.allCount)
+          highlighted: pane.scope === "current"
+          options: pane.scopeOptions
+          value: pane.scope === "current" ? "current" : "all"
+          onPicked: function(v) { pane.setScope(v) }
+        }
+
+        FilterPill {
+          id: ownerPicker
           visible: pane.ownerOptions.length > 0
-          implicitWidth: ownerPill.implicitWidth
-          implicitHeight: pane.pillHeight
-
-          Item {
-            anchors.top: parent.top
-            anchors.right: parent.right
-            width: Style.space(240)
-            height: 0
-            clip: true
-
-          SearchableDropdown {
-            id: ownerPicker
-            width: parent.width
-            showLabel: false
-            rowHeight: pane.pillHeight
-            options: pane.ownerOptions
-            value: pane.owner
-            placeholderText: "Search teammates..."
-            foreground: pane.foreground
-            accent: pane.accent
-            fontFamily: pane.fontFamily
-            onChanged: function(v) { pane.setOwner(v); keys.forceActiveFocus() }
-          }
-          }
-
-          Rectangle {
-            id: ownerPill
-            anchors.fill: parent
-            implicitWidth: ownerRow.implicitWidth + Style.spacing.controlPaddingX * 2
-            radius: height / 2
-            color: pane.tint(pane.foreground, ownerMouse.containsMouse || ownerPicker.popupOpen ? 0.12 : 0.06)
-            Behavior on color { ColorAnimation { duration: 120 } }
-
-            Row {
-              id: ownerRow
-              anchors.centerIn: parent
-              spacing: Style.spacing.sm
-
-              Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: pane.owner === "team" ? "" : ""
-                color: pane.others ? pane.accent : pane.muted
-                font.family: pane.fontFamily
-                font.pixelSize: Style.font.body
-              }
-
-              Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: pane.ownerLabel()
-                color: pane.others ? pane.accent : pane.foreground
-                font.family: pane.fontFamily
-                font.pixelSize: Style.font.body
-                font.bold: pane.others
-              }
-
-              Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: ""
-                color: pane.muted
-                font.family: pane.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-            }
-
-            MouseArea {
-              id: ownerMouse
-              anchors.fill: parent
-              hoverEnabled: true
-              cursorShape: Qt.PointingHandCursor
-              onClicked: ownerPicker.toggle()
-            }
-          }
+          icon: pane.owner === "team" ? "\uf0c0" : "\uf007"
+          label: pane.ownerLabel()
+          highlighted: pane.others
+          options: pane.ownerOptions
+          value: pane.owner
+          placeholderText: "Search teammates..."
+          onPicked: function(v) { pane.setOwner(v) }
         }
       }
 
@@ -517,6 +386,119 @@ Item {
   // The state, in the colour of how far along it is and behind a dot of it.
   // The gap above parts one group from the last; the room under the filter
   // is the list's own margin.
+  // One filter: a soft pill showing what is chosen, over the shell's
+  // searchable dropdown. The dropdown sits in a slot of no height level with
+  // the pill, so its own box never shows but its popup -- drawn on the
+  // overlay, outside any clip -- opens just under the pill, wide enough to
+  // read.
+  component FilterPill: Item {
+    id: pill
+    property string icon: ""
+    property string label: ""
+    property string count: ""
+    property bool highlighted: false
+    property var options: []
+    property string value: ""
+    property string placeholderText: "Search..."
+    signal picked(string value)
+    readonly property bool popupOpen: dropdown.popupOpen
+    function open() { dropdown.open() }
+    function close() { dropdown.close() }
+
+    implicitWidth: pillRow.implicitWidth + Style.spacing.controlPaddingX * 3
+    implicitHeight: pane.pillHeight
+
+    Item {
+      anchors.top: parent.top
+      anchors.right: parent.right
+      width: Math.max(Style.space(240), pill.width)
+      height: 0
+      clip: true
+
+      SearchableDropdown {
+        id: dropdown
+        width: parent.width
+        showLabel: false
+        rowHeight: pane.pillHeight
+        options: pill.options
+        value: pill.value
+        placeholderText: pill.placeholderText
+        foreground: pane.foreground
+        accent: pane.accent
+        fontFamily: pane.fontFamily
+        onChanged: function(v) { pill.picked(v); keys.forceActiveFocus() }
+      }
+    }
+
+    Rectangle {
+      anchors.fill: parent
+      radius: height / 2
+      color: pill.highlighted
+        ? pane.tint(pane.accent, pillMouse.containsMouse || dropdown.popupOpen ? 0.26 : 0.18)
+        : pane.tint(pane.foreground, pillMouse.containsMouse || dropdown.popupOpen ? 0.12 : 0.06)
+      Behavior on color { ColorAnimation { duration: 120 } }
+
+      Row {
+        id: pillRow
+        anchors.centerIn: parent
+        spacing: Style.spacing.sm
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: pill.icon
+          color: pill.highlighted ? pane.accent : pane.muted
+          font.family: pane.fontFamily
+          font.pixelSize: Style.font.body
+        }
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: pill.label
+          color: pill.highlighted ? pane.accent : pane.foreground
+          font.family: pane.fontFamily
+          font.pixelSize: Style.font.body
+          font.bold: pill.highlighted
+        }
+
+        // Hidden until the list has been read: a 0 that is really "not yet"
+        // would be a lie.
+        Rectangle {
+          anchors.verticalCenter: parent.verticalCenter
+          visible: pill.count !== ""
+          implicitWidth: pillCount.implicitWidth + Style.spacing.md * 2
+          implicitHeight: pillCount.implicitHeight + 2
+          radius: height / 2
+          color: pill.highlighted ? pane.tint(pane.accent, 0.22) : pane.tint(pane.foreground, 0.08)
+
+          Text {
+            id: pillCount
+            anchors.centerIn: parent
+            text: pill.count
+            color: pill.highlighted ? pane.accent : pane.muted
+            font.family: pane.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: "\uf078"
+          color: pane.muted
+          font.family: pane.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+
+      MouseArea {
+        id: pillMouse
+        anchors.fill: parent
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onClicked: dropdown.toggle()
+      }
+    }
+  }
+
   Component {
     id: headerRow
     Item {
