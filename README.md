@@ -169,6 +169,13 @@ drawn a hundred stories at a time, and the next hundred come in as you reach
 the bottom, by scrolling or with `↓`. A scrollbar shows while the list moves,
 and fades when it stops.
 
+Start typing anywhere on the list and it searches: every word has to turn up
+in a story's name, its number (with or without `sc-`), its state or who owns
+it, so `login ada` finds Ada's login stories. It searches everything fetched,
+not only what has been drawn so far, and keeps to the filters beside it.
+`↑` `↓` and `Enter` still work while you type; `Esc` clears the search, and
+the next `Esc` goes on as before.
+
 With a **Team** set in the settings, a picker on the right of the same row
 (`Alt + O`) shows someone else's stories: the whole team's, or one teammate's.
 It starts on **Me**. The team's list names who each story belongs to, and one

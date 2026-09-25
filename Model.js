@@ -739,7 +739,8 @@ var KEY_HELP = [
     ["Enter", "Open the story"],
     ["Ctrl + O", "Open it in Shortcut"],
     ["Alt + I", "Only the current sprint, or everything"],
-    ["Alt + O", "Whose: you, your team, or a teammate"]] },
+    ["Alt + O", "Whose: you, your team, or a teammate"],
+    ["Type", "Search the list; Esc clears it"]] },
   { title: "An open story", keys: [
     ["← →", "Pick a state"],
     ["Enter", "Move it there"],
@@ -963,6 +964,25 @@ function firstStories(rows, n) {
   }
   while (out.length && out[out.length - 1].kind !== "story") out.pop()
   return out
+}
+
+// The search on the list. Every word typed has to be found somewhere in the
+// story -- its name, its number with or without "sc-", its state, or who owns
+// it -- so "login ada" narrows to Ada's login stories. It runs over every
+// story fetched, not only the page drawn so far.
+function searchStories(stories, refs, query) {
+  var words = trim(query).toLowerCase().split(/\s+/).filter(function(w) { return w !== "" })
+  if (!words.length) return stories || []
+  return (stories || []).filter(function(story) {
+    var found = findState(refs, story.workflowStateId)
+    var owners = (story.ownerIds || []).map(function(id) {
+      var m = findMember(refs, id)
+      return m ? str(m.name) + " " + str(m.mentionName) : ""
+    }).join(" ")
+    var hay = [str(story.name), "sc-" + str(story.id), found ? str(found.state.name) : "", owners]
+      .join(" ").toLowerCase()
+    return words.every(function(w) { return hay.indexOf(w) !== -1 })
+  })
 }
 
 // What the list says while it is being read, naming whose it is.
@@ -2069,6 +2089,7 @@ if (typeof module !== "undefined") {
     listOwnerOptions: listOwnerOptions, resolveListOwner: resolveListOwner,
     listOwnerArgs: listOwnerArgs, ownerNames: ownerNames, emptyListText: emptyListText,
     loadingListText: loadingListText, loaderFrame: loaderFrame, firstStories: firstStories, spinnerFrame: spinnerFrame,
+    searchStories: searchStories,
     storyRows: storyRows, themeColors: themeColors, sectionColor: sectionColor,
     storyTypeColor: storyTypeColor, linkChips: linkChips,
     moveNotice: moveNotice, movedBackNotice: movedBackNotice, keyHelp: keyHelp,

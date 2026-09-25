@@ -63,8 +63,12 @@ Item {
 
   // What you finished only reads as progress against a sprint. Across
   // everything assigned to you it is just a pile that keeps growing.
+  // What is typed in the search, and the list narrowed by it.
+  property string query: ""
+  readonly property var searchedStories: Model.searchStories(pane.scopedStories, pane.refs, pane.query)
+
   readonly property var allRows: Model.storyRows(
-    Model.sectionStories(pane.scopedStories, pane.refs, pane.scope === "current"))
+    Model.sectionStories(pane.searchedStories, pane.refs, pane.scope === "current"))
 
   TextMetrics {
     id: refWidth
@@ -84,6 +88,7 @@ Item {
   property bool scrollToTop: false
   onScopeChanged: { pane.shown = pane.pageSize; pane.scrollToTop = true }
   onOwnerChanged: { pane.shown = pane.pageSize; pane.scrollToTop = true }
+  onQueryChanged: { pane.shown = pane.pageSize; pane.scrollToTop = true }
 
   // The spinner in the footer goes up first, and the page is only drawn once
   // a frame with it has been painted -- drawing a page holds the thread, and
@@ -175,6 +180,9 @@ Item {
   function escapePressed() {
     if (ownerPicker.popupOpen) { ownerPicker.close(); keys.forceActiveFocus(); return true }
     if (scopePicker.popupOpen) { scopePicker.close(); keys.forceActiveFocus(); return true }
+    // Esc empties the search, then leaves it; the next one goes on as before.
+    if (pane.query !== "") { pane.query = ""; keys.forceActiveFocus(); return true }
+    if (searchInput.activeFocus) { keys.forceActiveFocus(); return true }
     return false
   }
 
@@ -225,6 +233,15 @@ Item {
       else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
         pane.activate(); event.accepted = true
       }
+      // Anything else you type is a search. ? stays the key card, and a
+      // leading space is nothing.
+      else if (!ctrl && !(event.modifiers & Qt.AltModifier) && event.text.length === 1
+               && event.text >= " " && event.text !== "?" && event.text !== " ") {
+        pane.query += event.text
+        searchInput.forceActiveFocus()
+        searchInput.cursorPosition = searchInput.text.length
+        event.accepted = true
+      }
     }
 
     ColumnLayout {
@@ -241,6 +258,94 @@ Item {
         Layout.bottomMargin: Style.spacing.xs
         visible: !!pane.refs
         spacing: Style.spacing.md
+
+        // The search: a pill like the filters beside it. Typing anywhere on
+        // the list lands here; the arrows and Enter still walk and open.
+        Rectangle {
+          Layout.preferredWidth: Style.space(320)
+          Layout.preferredHeight: pane.pillHeight
+          radius: height / 2
+          color: searchInput.activeFocus ? pane.tint(pane.foreground, 0.10)
+            : pane.tint(pane.foreground, searchMouse.containsMouse ? 0.10 : 0.06)
+          border.width: searchInput.activeFocus ? 1 : 0
+          border.color: pane.tint(pane.accent, 0.6)
+          Behavior on color { ColorAnimation { duration: 120 } }
+
+          MouseArea {
+            id: searchMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.IBeamCursor
+            onClicked: searchInput.forceActiveFocus()
+          }
+
+          Text {
+            id: searchIcon
+            anchors.left: parent.left
+            anchors.leftMargin: Style.spacing.controlPaddingX * 1.5
+            anchors.verticalCenter: parent.verticalCenter
+            text: "\uf002"
+            color: searchInput.activeFocus || pane.query !== "" ? pane.accent : pane.muted
+            font.family: pane.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          TextInput {
+            id: searchInput
+            anchors.left: searchIcon.right
+            anchors.right: clearSearch.visible ? clearSearch.left : parent.right
+            anchors.leftMargin: Style.spacing.sm
+            anchors.rightMargin: Style.spacing.controlPaddingX
+            anchors.verticalCenter: parent.verticalCenter
+            clip: true
+            text: pane.query
+            onTextEdited: pane.query = text
+            color: pane.foreground
+            selectionColor: pane.tint(pane.accent, 0.35)
+            font.family: pane.fontFamily
+            font.pixelSize: Style.font.body
+
+            // The list's keys still work from here.
+            Keys.onPressed: function(event) {
+              if (event.key === Qt.Key_Down) { pane.moveCursor(1); event.accepted = true }
+              else if (event.key === Qt.Key_Up) { pane.moveCursor(-1); event.accepted = true }
+              else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                pane.activate(); event.accepted = true
+              }
+            }
+
+            Text {
+              anchors.fill: parent
+              verticalAlignment: Text.AlignVCenter
+              visible: searchInput.text === ""
+              text: "Search stories"
+              color: pane.muted
+              font.family: pane.fontFamily
+              font.pixelSize: Style.font.body
+            }
+          }
+
+          Text {
+            id: clearSearch
+            visible: pane.query !== ""
+            anchors.right: parent.right
+            anchors.rightMargin: Style.spacing.controlPaddingX * 1.5
+            anchors.verticalCenter: parent.verticalCenter
+            text: "\uf00d"
+            color: clearMouse.containsMouse ? pane.foreground : pane.muted
+            font.family: pane.fontFamily
+            font.pixelSize: Style.font.caption
+
+            MouseArea {
+              id: clearMouse
+              anchors.fill: parent
+              anchors.margins: -Style.spacing.sm
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: { pane.query = ""; keys.forceActiveFocus() }
+            }
+          }
+        }
 
         Item { Layout.fillWidth: true }
 
@@ -307,7 +412,8 @@ Item {
             font.pixelSize: Style.font.body
             text: !pane.refs ? "Loading your workspace..."
               : (pane.loading ? Model.loadingListText(pane.owner, pane.ownerLabel())
-                : Model.emptyListText(pane.owner, pane.ownerLabel(), pane.scope))
+                : (pane.query.trim() !== "" ? "No stories match \u201c" + pane.query.trim() + "\u201d."
+                  : Model.emptyListText(pane.owner, pane.ownerLabel(), pane.scope)))
           }
         }
 
