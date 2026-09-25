@@ -237,9 +237,9 @@ Images can only go on a new story for now, not onto one you are editing.
 
 A row in the list is a glance -- reference, name, and how long since it
 last changed. The stories are grouped by how far along they are, and then
-by state, each with its own heading in workflow order -- "In progress · In
-Development" above "In progress · Code Review" -- so a row never has to repeat
-its state. The headings wear the theme's colours -- green for in progress,
+by state, each with its own heading in workflow order -- "In Development"
+above "Code Review" -- so a row never has to repeat its state. The heading is
+the state alone; its colour says how far along it is -- green for in progress,
 blue for ready, magenta for done -- and each story's glyph is coloured by its
 type, as Shortcut does: yellow for a feature, red for a bug, blue for a chore.
 Finished stories are dimmed. A story

@@ -611,6 +611,22 @@ function cameFrom(mode, storyId) {
   return { mode: m, storyId: m === "mine" && isFinite(id) && id > 0 ? id : 0 }
 }
 
+// The panel's title names what it is showing, in the same order the pane
+// itself is picked: settings first, then the token screen, an edit, the
+// form, the Solve and pull request screens, a story, and the list.
+function panelTitle(view) {
+  var v = view || {}
+  var ref = v.storyId ? "sc-" + v.storyId : ""
+  if (v.mode === "settings") return "Settings"
+  if (v.locked) return "Connect to Shortcut"
+  if (v.editingId) return "Edit sc-" + v.editingId
+  if (v.mode === "compose") return "New story"
+  if (ref && v.solveReview) return "Solve " + ref
+  if (ref && v.prReview) return "Pull request for " + ref
+  if (ref) return "Story " + ref
+  return "Stories"
+}
+
 // Where Esc on the settings lands: the pane you opened them from, and the
 // story if one was open. Settings are never the way out of the panel, so
 // with nowhere recorded -- the panel opened straight onto them -- it is the
@@ -881,6 +897,7 @@ function storiesInScope(stories, refs, scope, todayIso) {
 // "what is waiting" are the two questions this list answers. Inside a kind,
 // each state gets its own heading, in workflow order: In Development and
 // Ready for Code Review are both in progress, but they are not the same news.
+// The heading is the state alone; its colour says which kind it is.
 function sectionStories(stories, refs, showDone) {
   var summaries = (stories || []).map(function(s) { return summarizeStory(s, refs) })
   var sections = []
@@ -900,7 +917,7 @@ function sectionStories(stories, refs, showDone) {
       for (var g = 0; g < byState.length; g++) if (byState[g].commonState === name) group = byState[g]
       if (!group) {
         group = { type: type, title: sectionTitle(type), stories: [], commonState: name,
-                  heading: name ? sectionTitle(type) + " · " + name : sectionTitle(type) }
+                  heading: name || sectionTitle(type) }
         byState.push(group)
       }
       group.stories.push(rows[j])
@@ -1944,7 +1961,7 @@ if (typeof module !== "undefined") {
     ownerList: ownerList, addOwner: addOwner, removeOwner: removeOwner,
     ownerChips: ownerChips, ownerAddOptions: ownerAddOptions,
     fileList: fileList, addFiles: addFiles, removeFile: removeFile, withScreenshots: withScreenshots,
-    composeEscape: composeEscape, cameFrom: cameFrom, settingsBack: settingsBack,
+    composeEscape: composeEscape, cameFrom: cameFrom, settingsBack: settingsBack, panelTitle: panelTitle,
     storyRows: storyRows, themeColors: themeColors, sectionColor: sectionColor,
     storyTypeColor: storyTypeColor, linkChips: linkChips,
     moveNotice: moveNotice, movedBackNotice: movedBackNotice, keyHelp: keyHelp,

@@ -589,7 +589,13 @@ Item {
               spacing: Style.spacing.md
 
               Text {
-                text: "Shortcut"
+                text: Model.panelTitle({
+                  mode: root.mode, locked: root.locked,
+                  editingId: root.store ? root.store.editingId : 0,
+                  storyId: root.storyOpen ? root.store.detailFor : 0,
+                  solveReview: !!(root.store && root.store.solveReview),
+                  prReview: !!(root.store && root.store.prReview)
+                })
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.title

@@ -191,9 +191,9 @@ Item {
     }
   }
 
-  // How far along, in its colour and behind a dot of it, then the state in
-  // plain muted text. The gap above parts one group from the last; the room
-  // under the filter is the list's own margin.
+  // The state, in the colour of how far along it is and behind a dot of it.
+  // The gap above parts one group from the last; the room under the filter
+  // is the list's own margin.
   Component {
     id: headerRow
     Item {
@@ -220,20 +220,12 @@ Item {
         }
 
         PanelSectionHeader {
-          text: headerItem.info.kindTitle || headerItem.info.title
+          Layout.fillWidth: true
+          elide: Text.ElideRight
+          text: headerItem.info.title
           foreground: headerItem.tint
           color: headerItem.tint
           fontFamily: pane.fontFamily
-        }
-
-        Text {
-          Layout.fillWidth: true
-          visible: !!headerItem.info.state
-          elide: Text.ElideRight
-          text: headerItem.info.state || ""
-          color: pane.muted
-          font.family: pane.fontFamily
-          font.pixelSize: Style.font.caption
         }
       }
     }
