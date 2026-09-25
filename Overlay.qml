@@ -3,6 +3,7 @@ import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
+import Quickshell.Hyprland
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
@@ -184,6 +185,10 @@ Item {
     // panel lands on it rather than on the list you would then search.
     var story = parseInt(payload.story, 10)
     if (root.mode === "mine" && isFinite(story) && story > 0 && root.store) root.store.showStory(story)
+    // It opens where you are working. Once up it stays on that screen, so a
+    // summon from the bar or a notification does not pull it out from beside
+    // the window you are copying from.
+    if (!root.opened) root.screenName = Hyprland.focusedMonitor ? String(Hyprland.focusedMonitor.name || "") : ""
     root.opened = true
     root.grabKeyboard()
     Qt.callLater(function() { root.focusPane() })
@@ -352,9 +357,20 @@ Item {
     }
   }
 
+  // The screen the panel opened on, by Hyprland's name for it. Empty, or a
+  // screen since unplugged, leaves the choice to Quickshell.
+  property string screenName: ""
+  readonly property var openScreen: {
+    var screens = Quickshell.screens
+    for (var i = 0; i < screens.length; i++)
+      if (String(screens[i].name) === root.screenName) return screens[i]
+    return null
+  }
+
   PanelWindow {
     id: panel
     visible: root.opened
+    screen: root.openScreen
     // No anchors: the layer is the card's size and Hyprland centres it, so
     // the rest of the screen stays clickable -- the browser you are copying
     // a URL out of, say. No scrim, and a click outside does not close it;

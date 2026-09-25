@@ -123,6 +123,10 @@ keyboard; the panel's border fades to say so. `SUPER + ALT + T` -- or a click
 in one of its fields -- brings the keyboard back, and `Ctrl + V` pastes. Only
 `Esc`, or `SUPER + ALT + T` while the panel has the keyboard, closes it.
 
+It opens on the monitor you are working on. Once it is up it stays on that
+monitor: summoning it again from another one, or from the bar or a
+notification, brings the keyboard back to it where it is.
+
 ## Keys
 
 | Key | Does |
