@@ -25,7 +25,8 @@ Item {
   property bool editing: false
 
   // New story beside Solve, then the list beside the bar.
-  readonly property var pageColumns: Model.settingsPage()
+  readonly property var pageColumns: Model.settingsPage(
+    Model.showDevSettings(pane.store ? pane.store.linked : false, pane.settings))
 
   function takeFocus() { keys.forceActiveFocus() }
 

@@ -888,6 +888,19 @@ Item {
     try { return JSON.parse(String(text || "").trim()) } catch (e) { return null }
   }
 
+  // Linked from a checkout: the plugin's folder is a symlink rather than the
+  // clone `omarchy plugin add` makes. That is what working on it looks like,
+  // so it is what shows the settings only a developer needs. Asked once; a
+  // swap between the two restarts the shell anyway.
+  property bool linked: false
+
+  Process {
+    running: true
+    command: ["sh", "-c", 'test -L "$1" && echo linked', "sh",
+              Quickshell.env("HOME") + "/.config/omarchy/plugins/" + root.pluginId]
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.linked = text.trim() === "linked" }
+  }
+
   // ---- Processes. One per verb, so two never share a collector.
 
   Process {

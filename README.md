@@ -97,8 +97,8 @@ A token that Shortcut later rejects -- revoked, or from another workspace --
 locks the panel again and says so, rather than showing a form whose pickers
 are empty and whose Create button cannot work.
 
-Settings stay reachable while locked, so **Demo workspace** can be turned on
-without a token.
+Settings stay reachable while locked, so a developer can turn on
+**Demo workspace** (see [Developing](#developing)) without a token.
 
 The token goes to your keyring where there is one. It is never passed on a
 command line, so it does not show up in `ps`, and the shell process never sees
@@ -378,7 +378,7 @@ rather than going stale when this one ends.
 | Agent | Grok | Which coding agent Solve starts |
 | Refresh while closed | 5 min | How often the count is brought up to date |
 | Notify when assigned | on | A notification for each new story, as well as the badge |
-| Demo workspace | off | A made-up workspace; never calls Shortcut |
+| Demo workspace | off | A made-up workspace; never calls Shortcut. Only shown while developing |
 
 ## What it stores
 
@@ -477,6 +477,10 @@ does not happen to anyone installing a release; it only bites while a checkout
 is linked and being edited.
 
 Turn on **Demo workspace** to work on the panel without a token or a network.
+The switch is only on the settings page while the plugin is linked from a
+checkout like this, or while it is on, so it can always be turned off again.
+Anyone else never sees it. `SHORTCUT_DEMO=1` does the same for `bin/shortcut`
+from a terminal.
 
 ## Tests
 

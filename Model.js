@@ -1019,22 +1019,42 @@ var SETTINGS = [
     { key: "notifyAssigned", kind: "toggle", label: "Notify when assigned", fallback: true }
   ]},
   { title: "Shortcut", rows: [
-    { key: "demo", kind: "toggle", label: "Demo workspace", fallback: false,
+    // `dev` rows are for working on the plugin, and only shown then: see
+    // settingsPage.
+    { key: "demo", kind: "toggle", label: "Demo workspace", fallback: false, dev: true,
       hint: "A made-up workspace; never calls Shortcut" }
   ]}
 ]
 
 // The settings page. New story beside Solve, then the list beside the bar.
 // Shortcut sits under the bar: it is the one switch that is not part of either.
-function settingsPage() {
+//
+// Rows marked `dev` are left out unless `showDev`: the plugin is linked from a
+// checkout, or one of them is already on. The second is so a switch nobody can
+// see is never left on -- whoever has it on can always turn it off.
+function settingsPage(showDev) {
   var order = [["New story", "Stories"], ["Solve", "Bar", "Shortcut"]]
   return order.map(function(names) {
     return names.map(function(name) {
-      for (var i = 0; i < SETTINGS.length; i++)
-        if (SETTINGS[i].title === name) return SETTINGS[i]
+      for (var i = 0; i < SETTINGS.length; i++) {
+        if (SETTINGS[i].title !== name) continue
+        if (showDev) return SETTINGS[i]
+        var rows = SETTINGS[i].rows.filter(function(row) { return !row.dev })
+        return rows.length ? { title: SETTINGS[i].title, rows: rows } : null
+      }
       return null
     }).filter(function(section) { return section })
   })
+}
+
+function showDevSettings(linked, settings) {
+  if (linked) return true
+  for (var s = 0; s < SETTINGS.length; s++) {
+    var rows = SETTINGS[s].rows
+    for (var r = 0; r < rows.length; r++)
+      if (rows[r].dev && !isDefaultSetting(rows[r], readSetting(settings, rows[r].key))) return true
+  }
+  return false
 }
 
 // What a picker row offers. The values are what get stored, so they have to
@@ -1817,7 +1837,7 @@ if (typeof module !== "undefined") {
     prependCreated: prependCreated, relativeTime: relativeTime,
     SETTINGS: SETTINGS, settingsPage: settingsPage, settingRow: settingRow, choiceList: choiceList,
     coerceSetting: coerceSetting, readSetting: readSetting,
-    isDefaultSetting: isDefaultSetting, nextEntry: nextEntry,
+    isDefaultSetting: isDefaultSetting, nextEntry: nextEntry, showDevSettings: showDevSettings,
     hasCustomSettings: hasCustomSettings, toggleChoice: toggleChoice,
     sectionWeight: sectionWeight, settingsColumns: settingsColumns,
     entryFor: entryFor, settingsSummary: settingsSummary, barLabel: barLabel,
