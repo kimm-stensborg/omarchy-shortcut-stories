@@ -1081,6 +1081,15 @@ function storyTypeColor(type, colors, fallback) {
 
 // The list as the pane walks it: a heading, then its stories, each knowing
 // whether to name its state.
+// Where a story sits in the flattened, paginated rows the list actually
+// draws -- or -1 if it is not on this page (a different filter, a search, a
+// page not yet shown). Used to put the cursor on a story just filed.
+function rowIndexOf(rows, storyId) {
+  for (var i = 0; i < (rows || []).length; i++)
+    if (rows[i].kind === "story" && rows[i].story.id === storyId) return i
+  return -1
+}
+
 function storyRows(sections) {
   var out = []
   for (var i = 0; i < (sections || []).length; i++) {
@@ -1166,7 +1175,7 @@ var SETTINGS = [
     { key: "stickyFields", kind: "toggle", label: "Keep team and iteration after filing", fallback: true }
   ]},
   { title: "Stories", rows: [
-    { key: "defaultMode", kind: "choice", label: "Opens on", fallback: "compose",
+    { key: "defaultMode", kind: "choice", label: "Opens on", fallback: "mine",
       options: [{ value: "compose", label: "New story" }, { value: "mine", label: "Stories" }] },
     { key: "listScope", kind: "choice", label: "Show", fallback: "all",
       options: [{ value: "all", label: "Everything" },
@@ -2090,7 +2099,7 @@ if (typeof module !== "undefined") {
     listOwnerArgs: listOwnerArgs, ownerNames: ownerNames, emptyListText: emptyListText,
     loadingListText: loadingListText, loaderFrame: loaderFrame, firstStories: firstStories, spinnerFrame: spinnerFrame,
     searchStories: searchStories,
-    storyRows: storyRows, themeColors: themeColors, sectionColor: sectionColor,
+    storyRows: storyRows, rowIndexOf: rowIndexOf, themeColors: themeColors, sectionColor: sectionColor,
     storyTypeColor: storyTypeColor, linkChips: linkChips,
     moveNotice: moveNotice, movedBackNotice: movedBackNotice, keyHelp: keyHelp,
     editBase: editBase, buildUpdatePatch: buildUpdatePatch, resolveIterationSetting: resolveIterationSetting,

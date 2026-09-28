@@ -171,6 +171,17 @@ Item {
     return row && row.kind === "story" ? row.story : null
   }
 
+  // Called once, right after a story you just filed lands on this pane: put
+  // the cursor on it and bring it into view. A silent no-op if the current
+  // filter or search does not happen to show it -- it is still on the list,
+  // just not this page of it.
+  function highlight(storyId) {
+    var at = Model.rowIndexOf(pane.rows, storyId)
+    if (at < 0) return
+    pane.cursor = at
+    list.positionViewAtIndex(at, ListView.Contain)
+  }
+
   function takeFocus() {
     if (pane.rows.length && pane.rows[pane.cursor] && pane.rows[pane.cursor].kind !== "story")
       pane.cursor = pane.firstStoryRow()

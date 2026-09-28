@@ -25,7 +25,7 @@
     "defaultSection": "right",
     "defaults": {
       "barLabel": "count",
-      "defaultMode": "compose",
+      "defaultMode": "mine",
       "defaultType": "feature",
       "refreshMinutes": 5,
       "defaultOwner": "me"
@@ -89,7 +89,7 @@
           "compose",
           "mine"
         ],
-        "defaultValue": "compose"
+        "defaultValue": "mine"
       },
       {
         "key": "listScope",

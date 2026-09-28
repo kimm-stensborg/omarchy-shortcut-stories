@@ -354,6 +354,13 @@ Item {
     target: root.store
     function onStoryCreated(story) {
       root.form = Model.clearForm(root.form, root.formDefaults(), root.stickyFields)
+      // Filing one is not the end of it -- seeing it land is. The list is
+      // where that shows, with the new row already the one selected.
+      root.setMode("mine")
+      Qt.callLater(function() {
+        var pane = paneLoader.item
+        if (pane && typeof pane.highlight === "function") pane.highlight(story.id)
+      })
       Quickshell.execDetached([
         root.omarchyPath + "/bin/omarchy-notification-send",
         "--app-name", "Shortcut", "-g", "",
