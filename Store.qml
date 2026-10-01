@@ -559,6 +559,9 @@ Item {
   property bool solvePending: false
 
   signal solveReadyToClose()
+  // Up's tab is where the server runs: once it is running there, the panel
+  // closes so that tab is in front.
+  signal serveReadyToClose()
 
   function refreshWorkspaces() {
     if (spacesProc.running) return
@@ -697,10 +700,9 @@ Item {
       root.actionError = parsed && parsed.error ? parsed.error : "bin/solve gave no answer"
       return
     }
-    // Up's whole point is something to look at. bin/solve only ever sends a
-    // url once the script itself has printed one, so there is nothing here
-    // to decide -- just open whatever it said.
-    if (parsed.url) Quickshell.execDetached(["omarchy-launch-browser", String(parsed.url)])
+    // The server prints its own address in its tab, and you open it from
+    // there.
+    if (parsed.direction === "up") root.serveReadyToClose()
   }
 
   function persistServeConfig(label, patch) {

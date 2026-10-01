@@ -268,7 +268,7 @@ Item {
           visible: !!view.detail && !!view.store && Model.serveAvailable(view.detail, view.store.solveStatus)
           bordered: true
           text: "Up"
-          tooltipText: "Run this workspace's up script, and open its URL once it prints one (Alt+R)"
+          tooltipText: "Run this workspace's up script in its own Herdr tab (Alt+R)"
           foreground: view.accent
           fontFamily: view.fontFamily
           onClicked: if (view.store) view.store.launchServe(view.detail, "up")

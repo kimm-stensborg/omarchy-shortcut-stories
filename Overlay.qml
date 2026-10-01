@@ -837,6 +837,7 @@ Item {
   Connections {
     target: root.store
     function onSolveReadyToClose() { root.dismiss() }
+    function onServeReadyToClose() { root.dismiss() }
   }
 
   Component { id: solvePane; SolveReview {

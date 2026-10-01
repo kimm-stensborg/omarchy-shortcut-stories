@@ -830,16 +830,10 @@ has "it opens at the agent's cwd" "$(cat "$WORK/herdr.log")" "--cwd /home/kimm/P
 has "it looked for an existing tab first" "$(cat "$WORK/herdr.log")" "tab list --workspace w9"
 has "it focused the new tab" "$(cat "$WORK/herdr.log")" "tab focus w9:t9"
 is "the up script ran as typed" "$(cat "$FIX/run.txt")" "npm run dev"
-has "it waits for the script to say where to look" "$(cat "$WORK/herdr.log")" "pane wait-output --regex"
-hasnt "nothing printed a url, so none comes back" "$out" '"url"'
-
-reset_herdr
-out=$(HERDR_WAIT_LINE="Local:   http://localhost:5173/, ready." \
-  PATH="$WORK/bin:$PATH" HERDR_LOG="$WORK/herdr.log" HERDR_FIX="$FIX" HERDR_TAB_FOUND=1 "$SOLVE" serve <<'JSON'
-{"storyId":1234,"workspaceId":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories","direction":"up","script":"npm run dev"}
-JSON
-)
-is "a url the script printed comes back" "$(jq -r .url <<<"$out")" "http://localhost:5173/"
+is "it answers which direction it ran" "$(jq -r .direction <<<"$out")" "up"
+hasnt "it never waits on the script's output" "$(cat "$WORK/herdr.log")" "pane wait-output"
+hasnt "and never reads the pane back" "$(cat "$WORK/herdr.log")" "pane read"
+hasnt "and no url comes back to open" "$out" '"url"'
 
 reset_herdr
 rm -f "$FIX/run.txt"
@@ -848,6 +842,9 @@ out=$(printf '%s' '{"storyId":1234,"workspaceId":"w9","cwd":"/home/kimm/Projects
 is "a fresh down succeeds" "$(jq -r .ok <<<"$out")" "true"
 has "it names the tab after the story, suffixed" "$(cat "$WORK/herdr.log")" "--label serve-sc-1234-down"
 has "the down script ran, a completion marker appended" "$(cat "$FIX/run.txt")" "docker compose down; printf"
+hasnt "the marker is never typed out whole, or its echo would match" "$(cat "$FIX/run.txt")" "__serve_down_1234_done__"
+is "but it prints whole" "$(bash -c "$(sed 's/^docker compose down; //' "$FIX/run.txt")")" "__serve_down_1234_done__"
+has "and that whole marker is what it waits for" "$(cat "$WORK/herdr.log")" "--match __serve_down_1234_done__"
 hasnt "down never reports a url" "$out" '"url"'
 hasnt "no marker means nothing is closed" "$out" '"closed"'
 hasnt "neither tab is closed without the marker" "$(cat "$WORK/herdr.log")" "tab close"
@@ -884,7 +881,7 @@ is "a repeat call succeeds" "$(jq -r .ok <<<"$out")" "true"
 is "and says it was not created" "$(jq -r .created <<<"$out")" "false"
 has "it still looked first" "$(cat "$WORK/herdr.log")" "tab list"
 has "and focused the one it found" "$(cat "$WORK/herdr.log")" "tab focus w9:tS"
-has "it resolves the existing tab's pane to wait on" "$(cat "$WORK/herdr.log")" "pane list --workspace w9"
+hasnt "up has nothing to wait on, so no pane lookup" "$(cat "$WORK/herdr.log")" "pane list"
 hasnt "no second tab is created" "$(cat "$WORK/herdr.log")" "tab create"
 hasnt "and nothing new is run" "$(cat "$WORK/herdr.log")" "pane run"
 

@@ -764,7 +764,7 @@ Item {
             verticalPadding: 0
             bordered: false
             text: ""
-            tooltipText: "Run this workspace's up script, and open its URL once it prints one"
+            tooltipText: "Run this workspace's up script in its own Herdr tab"
             foreground: pane.muted
             fontFamily: pane.fontFamily
             onClicked: if (pane.store) pane.store.launchServe(row.story, "up")

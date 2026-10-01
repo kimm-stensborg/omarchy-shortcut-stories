@@ -8,8 +8,8 @@
 #   solve open-pr        read {dir, branch, base, title, body, draft}: push the branch, open its PR
 #   solve serve          read {storyId, workspaceId, cwd, direction, script}: run (or
 #                        refocus) the workspace's up or down script in its own tab.
-#                        An "up" that prints a URL answers with it, once seen. A
-#                        down closes both tabs once it finishes, not just its own
+#                        Up answers once its script is running in the tab. Down
+#                        closes both tabs, its own and up's, once it finishes
 #
 # The object start reads is {workspaceId, cwd, worktree, kind, agent, branch,
 # prompt}. worktree true checks out branch sc-<id> beside the repo; false opens
@@ -344,34 +344,24 @@ cmd_open_pr() {
 }
 
 # Opens (or re-focuses) a tab in the story's own workspace+directory and runs
-# one of its workspace's two configured scripts there -- up or down, each its
-# own tab, each run to completion independently. Pairing them so down tears
-# down whatever up started (docker compose up -d / down, say) is the script's
-# job, not this one's: this never interrupts a running up to run down in the
-# same place, it just runs whichever script was asked for in a tab named for
-# that direction, so a second call for the same direction finds and focuses
-# the one from before instead of piling up another.
-# workspaceId/cwd come from the caller already knowing where the story's agent
-# is (see cmd_status): this never asks Herdr to find that itself.
+# one of its workspace's two configured scripts there -- up or down, each in
+# its own tab named for that direction, each run to completion independently.
+# The scripts pair themselves: down tears down whatever up started (docker
+# compose up -d / down, say). A second call for the same direction finds and
+# focuses the tab from before.
+# workspaceId/cwd come from the caller, which already knows where the story's
+# agent is (see cmd_status).
 #
-# Up's whole point is something to look at, and the script -- "make sure the
-# server is running" -- is the one thing that knows its address, not a
-# setting the panel would have to keep in sync with it. So rather than ask
-# for a URL up front, this waits a little for the script's own output to say
-# one: most dev servers print "Local: http://localhost:3000" or similar the
-# moment they are ready, and Herdr can wait for exactly that line to appear
-# without this script polling for it by hand. An up whose script never
-# prints a URL (because it starts something you do not review in a browser)
-# just skips having one -- not an error, nothing to open.
+# Up answers as soon as its script is running in the tab, so the script
+# installs dependencies or builds for as long as it needs before it serves.
+# The server prints its own address in that tab, and you open it from there.
 #
-# Down tears down what up started, so both tabs are done once it has: a
-# marker is appended after the down script and this waits for that marker --
-# not just for the script to be submitted -- before closing either tab,
-# because closing a tab ends whatever is still running in it, and a
-# half-finished teardown is worse than a tab left open a little longer. If
-# the marker never turns up (the script hangs, or takes longer than the
-# wait), neither tab is closed and "closed" comes back false -- down itself
-# still answers ok, since the script genuinely did run.
+# Down tears down what up started, then closes both tabs. A marker is
+# appended after the down script, and this waits for that marker to print
+# before closing either tab: closing a tab ends whatever still runs in it, so
+# the teardown gets to finish first. A marker that is still missing when the
+# wait runs out leaves both tabs open and answers "closed" false -- down
+# itself answers ok, since the script did run.
 cmd_serve() {
   cat >"$WORK/body.json"
   local story ws cwd direction script
@@ -398,13 +388,15 @@ cmd_serve() {
     '[.result.tabs[]? | select(.label == $label)] | .[0].tab_id // empty' "$WORK/out.json")
 
   if [[ -n $tab_id ]]; then
-    # Already running (up), or a previous down that never confirmed it
-    # finished: nothing new to submit, just find its pane again so either
-    # direction can still check on what it already asked for.
-    run_herdr pane list --workspace "$ws"
-    require_herdr
-    pane=$(jq -r --arg tab "$tab_id" \
-      '[.result.panes[]? | select(.tab_id == $tab)] | .[0].pane_id // empty' "$WORK/out.json")
+    # Already running (up), or a previous down still finishing: that tab is
+    # reused as it is. Up brings it forward; down finds its pane again, to
+    # check whether that teardown has finished.
+    if [[ $direction == down ]]; then
+      run_herdr pane list --workspace "$ws"
+      require_herdr
+      pane=$(jq -r --arg tab "$tab_id" \
+        '[.result.panes[]? | select(.tab_id == $tab)] | .[0].pane_id // empty' "$WORK/out.json")
+    fi
     run_herdr tab focus "$tab_id"
   else
     run_herdr tab create --workspace "$ws" --cwd "$cwd" --label "$label" --no-focus
@@ -414,20 +406,18 @@ cmd_serve() {
     [[ -n $pane && -n $tab_id ]] || fail "Herdr did not return a tab" herdr
 
     local to_run="$script"
-    [[ $direction == down ]] && to_run="$script; printf '%s\n' $marker"
+    # Printed in two halves that printf joins: the pane echoes the command as
+    # it is typed, so the whole marker first appears when the script itself
+    # has finished, and that is the moment the wait matches.
+    [[ $direction == down ]] && to_run="$script; printf '%s%s\n' ${marker:0:10} ${marker:10}"
     run_herdr pane run "$pane" "$to_run" ||
       fail "The tab opened, but Herdr would not run the $direction script: $(herdr_message)" herdr
     run_herdr tab focus "$tab_id"
     created=true
   fi
 
-  local url="" closed=false
-  if [[ $direction == up ]]; then
-    if [[ -n $pane ]] && run_herdr pane wait-output --regex 'https?://\S+' --timeout 12000 "$pane"; then
-      url=$(jq -r '.result.matched_line // ""' "$WORK/out.json" |
-        grep -oE 'https?://[^[:space:]]+' | head -1 | sed -E 's/[]).,;:!?[]+$//')
-    fi
-  else
+  local closed=false
+  if [[ $direction == down ]]; then
     if [[ -n $pane ]] && run_herdr pane wait-output --match "$marker" --timeout 30000 "$pane"; then
       run_herdr tab close "$tab_id"
       # Up's tab, if there is one, has nothing left to run now either.
@@ -442,9 +432,8 @@ cmd_serve() {
     fi
   fi
 
-  jq -cn --arg tab "$tab_id" --argjson created "$created" --arg url "$url" --argjson closed "$closed" \
-    '{ok: true, created: $created, tabId: $tab}
-     + (if $url != "" then {url: $url} else {} end)
+  jq -cn --arg tab "$tab_id" --argjson created "$created" --arg direction "$direction" --argjson closed "$closed" \
+    '{ok: true, created: $created, tabId: $tab, direction: $direction}
      + (if $closed then {closed: true} else {} end)'
 }
 
