@@ -2077,13 +2077,404 @@ function serveOpenable(story, status, workspaces, settings, direction) {
   return { ok: true, reason: "" }
 }
 
+// A script as written in the settings, as the one line Herdr types into the
+// tab. One line goes as it is. Several are a bash script, run as one with the
+// meaning they would have in a file -- a newline is a `;`, a `for` can span
+// lines, a # comment is a comment -- so it is handed to eval in ANSI-C quotes,
+// which hold a newline or a quote of any kind without the shell in the tab
+// reading anything into them. The Format button's output is only safe to run
+// because of this: it changes the layout, never what the script does.
+function serveCommand(script) {
+  var text = trim(script)
+  if (text.indexOf("\n") === -1) return text
+  return "eval $'" + text.replace(/[\x00-\x1f\x7f\\']/g, function(c) {
+    if (c === "\\") return "\\\\"
+    if (c === "'") return "\\'"
+    if (c === "\n") return "\\n"
+    if (c === "\t") return "\\t"
+    var hex = c.charCodeAt(0).toString(16)
+    return "\\x" + (hex.length < 2 ? "0" : "") + hex
+  }) + "'"
+}
+
+// ---- Formatting a serve script ------------------------------------------
+// The Format button on a workspace's scripts. Bash has no small grammar, so
+// this reads only the shapes a serve script is made of -- commands joined by
+// ; & && || |, { } and ( ) groups, if, for, while, until, functions -- and
+// refuses the rest (here-documents, case, (( )), select) rather than guess
+// at them: a formatter that splits at the wrong ; changes what the script
+// does and shows it as if nothing happened. Quotes, $( ), ${ }, backticks
+// and [[ ]] are kept whole, exactly as written. Only the layout changes,
+// which is safe because several lines run as a bash script (serveCommand).
+
+function ShellFormatError(message) { this.formatError = message }
+
+function shellTokens(src) {
+  var toks = []
+  var n = src.length
+  var i = 0
+
+  function lineAt(pos) {
+    var line = 1
+    for (var k = 0; k < pos && k < n; k++) if (src.charAt(k) === "\n") line++
+    return line
+  }
+  function fail(pos, message) { throw new ShellFormatError("Line " + lineAt(pos) + ": " + message) }
+
+  function skipSingle(j) {
+    var end = src.indexOf("'", j + 1)
+    if (end < 0) fail(j, "a ' quote is never closed")
+    return end + 1
+  }
+  function skipBacktick(j) {
+    for (var k = j + 1; k < n; k++) {
+      var c = src.charAt(k)
+      if (c === "\\") { k++; continue }
+      if (c === "`") return k + 1
+    }
+    fail(j, "a ` quote is never closed")
+  }
+  function skipDouble(j) {
+    for (var k = j + 1; k < n; k++) {
+      var c = src.charAt(k)
+      if (c === "\\") { k++; continue }
+      if (c === "\"") return k + 1
+      if (c === "`") { k = skipBacktick(k) - 1; continue }
+      if (c === "$" && src.charAt(k + 1) === "(") { k = skipNested(k + 1, "(", ")") - 1; continue }
+      if (c === "$" && src.charAt(k + 1) === "{") { k = skipNested(k + 1, "{", "}") - 1; continue }
+    }
+    fail(j, "a \" quote is never closed")
+  }
+  // From an opening ( or { to just past the one that closes it.
+  function skipNested(j, open, close) {
+    var depth = 0
+    for (var k = j; k < n; k++) {
+      var c = src.charAt(k)
+      if (c === "\\") { k++; continue }
+      if (c === "'") { k = skipSingle(k) - 1; continue }
+      if (c === "\"") { k = skipDouble(k) - 1; continue }
+      if (c === "`") { k = skipBacktick(k) - 1; continue }
+      if (c === open) depth++
+      else if (c === close && --depth === 0) return k + 1
+    }
+    fail(j, "a " + open + " is never closed")
+  }
+
+  function push(t, v, pos) { toks.push({ t: t, v: v, pos: pos, line: lineAt(pos) }) }
+
+  while (i < n) {
+    var c = src.charAt(i)
+    if (c === "\\" && src.charAt(i + 1) === "\n") { i += 2; continue }
+    if (c === " " || c === "\t" || c === "\r") { i++; continue }
+    if (c === "\n") { push("nl", "\n", i); i++; continue }
+    if (c === "#") {
+      var eol = src.indexOf("\n", i)
+      if (eol < 0) eol = n
+      push("comment", src.slice(i, eol).replace(/\s+$/, ""), i)
+      i = eol
+      continue
+    }
+    var two = src.substr(i, 2)
+    if (two === "&&" || two === "||" || two === "|&" || two === ";;") { push("op", two, i); i += 2; continue }
+    if (c === ";" || c === "|" || c === "(" || c === ")" || (c === "&" && src.charAt(i + 1) !== ">")) {
+      push("op", c, i); i++; continue
+    }
+
+    var start = i
+    // [[ ]] is one test, && and ( ) and all: kept whole, as written.
+    if (two === "[[" && /[\s]/.test(src.charAt(i + 2))) {
+      var close = /\s\]\](?=[\s;&|)]|$)/g
+      close.lastIndex = i + 2
+      var m = close.exec(src)
+      if (!m) fail(i, "a [[ is never closed")
+      i = m.index + m[0].length
+      push("word", src.slice(start, i), start)
+      continue
+    }
+    while (i < n) {
+      c = src.charAt(i)
+      var prev = i > start ? src.charAt(i - 1) : ""
+      if (c === "\\") { i += 2; continue }
+      if (c === "'") { i = skipSingle(i); continue }
+      if (c === "\"") { i = skipDouble(i); continue }
+      if (c === "`") { i = skipBacktick(i); continue }
+      if (c === "$" && src.charAt(i + 1) === "(") { i = skipNested(i + 1, "(", ")"); continue }
+      if (c === "$" && src.charAt(i + 1) === "{") { i = skipNested(i + 1, "{", "}"); continue }
+      if ((c === "<" || c === ">") && src.charAt(i + 1) === "(") { i = skipNested(i + 1, "(", ")"); continue }
+      if (c === "(" && prev === "=") { i = skipNested(i, "(", ")"); continue }
+      if (c === "<" && src.charAt(i + 1) === "<") {
+        if (src.charAt(i + 2) === "<") { i += 3; continue }
+        fail(i, "here-documents can't be formatted")
+      }
+      // 2>&1, >&2, &>log, >|log: redirections, not a background job or a pipe.
+      if (c === "&" && (prev === ">" || prev === "<" || src.charAt(i + 1) === ">")) { i++; continue }
+      if (c === "|" && prev === ">") { i++; continue }
+      if (" \t\r\n;&|()".indexOf(c) !== -1) break
+      i++
+    }
+    push("word", src.slice(start, i), start)
+  }
+  return toks
+}
+
+function parseShell(toks) {
+  var p = 0
+  var lastLine = toks.length ? toks[toks.length - 1].line : 1
+
+  function peek() { return toks[p] || null }
+  function fail(tok, message) {
+    throw new ShellFormatError("Line " + (tok ? tok.line : lastLine) + ": " + message)
+  }
+  function isWord(tok, v) { return !!tok && tok.t === "word" && tok.v === v }
+  function isOp(tok, v) { return !!tok && tok.t === "op" && tok.v === v }
+  function expectWord(v) {
+    var tok = peek()
+    if (!isWord(tok, v)) fail(tok, "expected " + v + (tok ? " before " + tok.v.trim() : " before the end"))
+    p++
+  }
+  function skipNewlines() { while (peek() && peek().t === "nl") p++ }
+
+  function list(stops) {
+    var items = []
+    var newlines = 0
+    for (;;) {
+      var tok = peek()
+      if (!tok) break
+      if (tok.t === "nl") { newlines++; p++; continue }
+      if (tok.t === "comment") {
+        items.push({ kind: "comment", text: tok.v, blank: newlines > 1 && items.length > 0 })
+        newlines = 0; p++
+        continue
+      }
+      if (tok.t === "word" && stops.indexOf(tok.v) !== -1) break
+      if (isOp(tok, ")") && stops.indexOf(")") !== -1) break
+      var item = { kind: "cmd", chain: chain(), term: "", comment: "",
+                   blank: newlines > 1 && items.length > 0 }
+      newlines = 0
+      var endLine = toks[p - 1].line
+      tok = peek()
+      if (isOp(tok, ";") || isOp(tok, "&")) { item.term = tok.v; p++; endLine = tok.line }
+      tok = peek()
+      if (tok && tok.t === "comment" && tok.line === endLine) { item.comment = tok.v; p++ }
+      items.push(item)
+    }
+    return items
+  }
+
+  function chain() {
+    var parts = [command()]
+    for (;;) {
+      var tok = peek()
+      if (!tok || tok.t !== "op" || ["&&", "||", "|", "|&"].indexOf(tok.v) === -1) break
+      p++
+      skipNewlines()
+      parts.push(tok.v, command())
+    }
+    return parts
+  }
+
+  function redirects(node) {
+    node.redirects = []
+    while (peek() && peek().t === "word") { node.redirects.push(peek().v); p++ }
+    return node
+  }
+
+  function command() {
+    var tok = peek()
+    if (!tok) fail(null, "the script ends in the middle of a command")
+    if (isOp(tok, "(")) {
+      var next = toks[p + 1]
+      if (next && isOp(next, "(") && next.pos === tok.pos + 1) fail(tok, "(( )) can't be formatted")
+      p++
+      var sub = list([")"])
+      if (!isOp(peek(), ")")) fail(peek(), "a ( is never closed")
+      p++
+      return redirects({ kind: "subshell", body: sub })
+    }
+    if (tok.t !== "word") fail(tok, "unexpected " + tok.v.trim())
+    switch (tok.v) {
+      case "{":
+        p++
+        var body = list(["}"])
+        expectWord("}")
+        return redirects({ kind: "group", body: body })
+      case "if":
+        p++
+        var clauses = []
+        var otherwise = null
+        var cond = list(["then"])
+        expectWord("then")
+        clauses.push({ cond: cond, body: list(["elif", "else", "fi"]) })
+        while (isWord(peek(), "elif")) {
+          p++
+          cond = list(["then"])
+          expectWord("then")
+          clauses.push({ cond: cond, body: list(["elif", "else", "fi"]) })
+        }
+        if (isWord(peek(), "else")) { p++; otherwise = list(["fi"]) }
+        expectWord("fi")
+        return redirects({ kind: "if", clauses: clauses, otherwise: otherwise })
+      case "for":
+        p++
+        var name = peek()
+        if (isOp(name, "(")) fail(name, "for (( )) can't be formatted")
+        if (!name || name.t !== "word") fail(name, "for needs a name")
+        p++
+        var words = null
+        if (isWord(peek(), "in")) {
+          p++
+          words = []
+          while (peek() && peek().t === "word") { words.push(peek().v); p++ }
+        }
+        if (isOp(peek(), ";")) p++
+        skipNewlines()
+        expectWord("do")
+        var loop = list(["done"])
+        expectWord("done")
+        return redirects({ kind: "for", name: name.v, words: words, body: loop })
+      case "while":
+      case "until":
+        p++
+        var test = list(["do"])
+        expectWord("do")
+        var again = list(["done"])
+        expectWord("done")
+        return redirects({ kind: "while", word: tok.v, cond: test, body: again })
+      case "case":
+        fail(tok, "case can't be formatted")
+      case "select":
+        fail(tok, "select can't be formatted")
+      case "function":
+        fail(tok, "write a function as name() { ... } to format it")
+      case "then": case "elif": case "else": case "fi": case "do": case "done":
+      case "}": case "esac": case "in":
+        fail(tok, "unexpected " + tok.v)
+    }
+    var simple = []
+    while (peek() && peek().t === "word") { simple.push(peek().v); p++ }
+    if (simple.length === 1 && isOp(peek(), "(") && isOp(toks[p + 1], ")")) {
+      p += 2
+      skipNewlines()
+      return { kind: "function", name: simple[0], body: command() }
+    }
+    return { kind: "simple", words: simple }
+  }
+
+  var items = list([])
+  if (p < toks.length) fail(toks[p], "unexpected " + toks[p].v.trim())
+  return items
+}
+
+// A chain longer than this goes one command to a line, the operator ending
+// the line before -- bash carries on after a trailing && on its own.
+var SHELL_LINE = 80
+
+function printShell(items, indent) {
+  var lines = []
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i]
+    if (item.blank) lines.push("")
+    if (item.kind === "comment") { lines.push(indent + item.text); continue }
+    lines.push(indent + printChain(item.chain, indent)
+      + (item.term === "&" ? " &" : "") + (item.comment ? " " + item.comment : ""))
+  }
+  return lines.join("\n")
+}
+
+function printChain(parts, indent) {
+  var printed = []
+  var simple = true
+  for (var i = 0; i < parts.length; i += 2) {
+    printed.push(printCommand(parts[i], indent))
+    if (parts[i].kind !== "simple") simple = false
+  }
+  var flat = printed[0]
+  for (var j = 1; j < printed.length; j++) flat += " " + parts[j * 2 - 1] + " " + printed[j]
+  if (!simple || printed.length < 2 || indent.length + flat.length <= SHELL_LINE) return flat
+  var broken = printed[0]
+  for (var k = 1; k < printed.length; k++) broken += " " + parts[k * 2 - 1] + "\n" + indent + "  " + printed[k]
+  return broken
+}
+
+// One line of a condition: if a; b; then.
+function printInline(items) {
+  var out = ""
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].kind === "comment") continue
+    if (out !== "") out += items[i - 1] && items[i - 1].term === "&" ? " " : "; "
+    out += printChain(items[i].chain, "") + (items[i].term === "&" ? " &" : "")
+  }
+  return out
+}
+
+function printBlock(items, indent) {
+  var body = printShell(items, indent + "  ")
+  return body === "" ? "\n" : "\n" + body + "\n"
+}
+
+function printCommand(node, indent) {
+  var tail = node.redirects && node.redirects.length ? " " + node.redirects.join(" ") : ""
+  switch (node.kind) {
+    case "simple": return node.words.join(" ")
+    case "group": return "{" + printBlock(node.body, indent) + indent + "}" + tail
+    case "subshell": return "(" + printBlock(node.body, indent) + indent + ")" + tail
+    case "function": return node.name + "() " + printCommand(node.body, indent)
+    case "for":
+      return "for " + node.name + (node.words ? " in " + node.words.join(" ") : "") + "; do"
+        + printBlock(node.body, indent) + indent + "done" + tail
+    case "while":
+      return node.word + " " + printInline(node.cond) + "; do"
+        + printBlock(node.body, indent) + indent + "done" + tail
+    case "if":
+      var out = ""
+      for (var i = 0; i < node.clauses.length; i++) {
+        out += (i === 0 ? "if " : indent + "elif ") + printInline(node.clauses[i].cond) + "; then"
+          + printBlock(node.clauses[i].body, indent)
+      }
+      if (node.otherwise) out += indent + "else" + printBlock(node.otherwise, indent)
+      return out + indent + "fi" + tail
+  }
+  return ""
+}
+
+// What the script is made of, minus layout: newlines and ; are all the
+// printer is allowed to change.
+function shellSubstance(toks) {
+  var out = []
+  for (var i = 0; i < toks.length; i++) {
+    var t = toks[i]
+    if (t.t === "nl" || (t.t === "op" && t.v === ";")) continue
+    out.push(t.t + ":" + t.v)
+  }
+  return out.join("\u0000")
+}
+
+// {ok, script} with the script laid out, or {ok: false, error} saying why it
+// was left alone. The result is read back and checked against the original
+// before it is offered: the same words, quotes, operators and comments, in
+// the same order, or it is refused.
+function formatScript(script) {
+  var text = str(script)
+  if (trim(text) === "") return { ok: true, script: "" }
+  try {
+    var toks = shellTokens(text)
+    var out = printShell(parseShell(toks), "")
+    if (shellSubstance(shellTokens(out)) !== shellSubstance(toks))
+      return { ok: false, error: "This script can't be formatted safely, so it is left as it is" }
+    return { ok: true, script: out }
+  } catch (e) {
+    if (e instanceof ShellFormatError) return { ok: false, error: e.formatError }
+    throw e
+  }
+}
+
 // What bin/solve serve is handed, once serveOpenable has already said yes.
 function serveRequestFor(story, status, workspaces, settings, direction) {
   var agent = solveAgentFor(status, story && story.id)
   if (!agent || !agent.cwd || !agent.workspaceId) return null
   var label = workspaceLabelById(workspaces, agent.workspaceId)
   var cfg = serveConfigFor(settings, label)
-  var script = direction === "down" ? cfg.down : cfg.up
+  var script = serveCommand(direction === "down" ? cfg.down : cfg.up)
   if (!script) return null
   return {
     storyId: solveId(story.id),
@@ -2212,6 +2603,7 @@ if (typeof module !== "undefined") {
     prOpenable: prOpenable, prDraft: prDraft, withPrLink: withPrLink, stateAfterPr: stateAfterPr,
     workspaceServeConfig: workspaceServeConfig, workspaceLabelById: workspaceLabelById,
     serveConfigFor: serveConfigFor, serveAvailable: serveAvailable, serveOpenable: serveOpenable,
-    serveRequestFor: serveRequestFor, nextWorkspaceServeConfig: nextWorkspaceServeConfig
+    serveCommand: serveCommand, formatScript: formatScript, serveRequestFor: serveRequestFor,
+    nextWorkspaceServeConfig: nextWorkspaceServeConfig
   }
 }

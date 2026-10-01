@@ -819,6 +819,8 @@ Item {
         + " · ? keys · Esc back"
     if (root.mode === "mine")
       return "Enter opens a story · Alt+I the current sprint · ? keys · Esc closes"
+    if (root.mode === "settings" && paneLoader.item && paneLoader.item.footerHint)
+      return paneLoader.item.footerHint
     if (root.mode === "settings")
       return "Alt+1 a new story · ? keys · Esc back"
     return "Alt+1 a new story · ? keys · Esc closes"

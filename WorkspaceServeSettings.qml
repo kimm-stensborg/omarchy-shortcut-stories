@@ -4,11 +4,12 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// One row per Herdr workspace: its name, and a Configure button that reveals
-// its up and down scripts. Not a Model.SETTINGS row -- the settings system
-// there only understands one scalar per key, and this is a map keyed by
-// however many workspaces happen to exist, so it is read and written with
-// its own small bit of code instead (see Store.qml's persistServeConfig).
+// One row per Herdr workspace: its name, what its up script starts, and a
+// Configure button that opens its scripts on a page of their own
+// (ServeScriptEditor). Not a Model.SETTINGS row -- the settings system there
+// only understands one scalar per key, and this is a map keyed by however
+// many workspaces happen to exist, so it is read and written with its own
+// small bit of code instead (see Store.qml's persistServeConfig).
 Item {
   id: root
 
@@ -20,12 +21,7 @@ Item {
   property color accent: Color.accent
   property string fontFamily: Style.font.family
 
-  property var focusedField: null
-  readonly property bool editing: focusedField !== null && focusedField.activeFocus
-
-  signal changed(string label, var patch)   // patch is {upScript: ...} or {downScript: ...}
-
-  function dropFocus() { root.focusedField = null }
+  signal configure(string label)
 
   implicitHeight: content.implicitHeight + Style.space(14) * 2
 
@@ -63,100 +59,49 @@ Item {
     Repeater {
       model: root.workspaces || []
 
-      Column {
+      RowLayout {
         id: wsRow
         required property var modelData
-        // Collapsed by default even for a workspace that already has scripts
-        // set -- a page that unfolds every row the moment it is opened reads
-        // as a wall of fields, not a list.
-        property bool expanded: false
         readonly property var cfg: Model.serveConfigFor(root.settings, modelData.label)
         readonly property bool configured: cfg.up !== "" || cfg.down !== ""
         width: content.width
         spacing: Style.space(8)
 
-        RowLayout {
-          width: parent.width
-          spacing: Style.space(8)
-
-          Text {
-            Layout.fillWidth: true
-            elide: Text.ElideRight
-            textFormat: Text.PlainText
-            text: wsRow.modelData.label
-            color: root.fg
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-          }
-
-          Rectangle {
-            visible: wsRow.configured
-            Layout.alignment: Qt.AlignVCenter
-            Layout.preferredWidth: Style.space(6)
-            Layout.preferredHeight: Style.space(6)
-            radius: width / 2
-            color: root.accent
-          }
-
-          Button {
-            bordered: wsRow.expanded
-            text: wsRow.expanded ? "Close" : "Configure"
-            foreground: wsRow.expanded ? root.accent : root.muted
-            fontFamily: root.fontFamily
-            onClicked: wsRow.expanded = !wsRow.expanded
-          }
+        Text {
+          textFormat: Text.PlainText
+          text: wsRow.modelData.label
+          color: root.fg
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
         }
 
-        Column {
-          visible: wsRow.expanded
-          width: parent.width
-          spacing: Style.space(4)
+        // The first line of up, so the list says what each workspace starts
+        // without opening it.
+        Text {
+          Layout.fillWidth: true
+          elide: Text.ElideRight
+          textFormat: Text.PlainText
+          text: wsRow.configured ? (wsRow.cfg.up.split("\n")[0] || "down only") : "no scripts"
+          color: root.muted
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
 
-          Text {
-            text: "Up script"
-            color: root.muted
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
+        Rectangle {
+          visible: wsRow.configured
+          Layout.alignment: Qt.AlignVCenter
+          Layout.preferredWidth: Style.space(6)
+          Layout.preferredHeight: Style.space(6)
+          radius: width / 2
+          color: root.accent
+        }
 
-          TextField {
-            width: parent.width
-            text: wsRow.cfg.up
-            placeholderText: "e.g. docker compose up -d"
-            foreground: root.fg
-            font.family: root.fontFamily
-
-            onActiveFocusChanged: {
-              if (activeFocus) root.focusedField = this
-              else if (root.focusedField === this) root.focusedField = null
-            }
-            onAccepted: { root.changed(wsRow.modelData.label, { upScript: text }); root.dropFocus() }
-            onEditingFinished: root.changed(wsRow.modelData.label, { upScript: text })
-            Keys.onEscapePressed: { text = wsRow.cfg.up; root.dropFocus() }
-          }
-
-          Text {
-            text: "Down script"
-            color: root.muted
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-
-          TextField {
-            width: parent.width
-            text: wsRow.cfg.down
-            placeholderText: "e.g. docker compose down"
-            foreground: root.fg
-            font.family: root.fontFamily
-
-            onActiveFocusChanged: {
-              if (activeFocus) root.focusedField = this
-              else if (root.focusedField === this) root.focusedField = null
-            }
-            onAccepted: { root.changed(wsRow.modelData.label, { downScript: text }); root.dropFocus() }
-            onEditingFinished: root.changed(wsRow.modelData.label, { downScript: text })
-            Keys.onEscapePressed: { text = wsRow.cfg.down; root.dropFocus() }
-          }
+        Button {
+          bordered: true
+          text: "Configure"
+          foreground: root.muted
+          fontFamily: root.fontFamily
+          onClicked: root.configure(wsRow.modelData.label)
         }
       }
     }

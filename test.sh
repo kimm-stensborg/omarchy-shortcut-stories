@@ -1048,6 +1048,73 @@ out=$(jq -cn --arg dir "$REPO" '{dir: $dir, branch: "sc-1234", title: "x"}' | op
 is "no origin is refused before pushing" "$(jq -r .code <<<"$out")" "git"
 has "and says so"                      "$(jq -r .error <<<"$out")" "no origin"
 
+# ---- format ----------------------------------------------------------------
+echo "format"
+# Model.formatScript only changes layout, so every script here has to print
+# the same thing in bash before and after it, parse as bash after it, and
+# come out unchanged when formatted a second time.
+FMT_CASES="$WORK/fmt-cases"
+mkdir -p "$FMT_CASES"
+cat >"$FMT_CASES/1" <<'SH'
+x=1; [ -n "$x" ] || echo never; [ -z "" ] && { echo "a; b" && echo 'c && d'; }; echo "$(echo nested; echo too)" | tr a-z A-Z
+SH
+cat >"$FMT_CASES/2" <<'SH'
+for w in one "two three" four; do if [ "$w" = four ]; then echo last; elif [ "$w" = one ]; then echo first; else echo "mid:$w"; fi; done
+SH
+cat >"$FMT_CASES/3" <<'SH'
+# a comment of its own
+n=0; while [ $n -lt 3 ]; do n=$((n + 1)); echo "n=$n" # counting
+done; until true; do echo never; done
+
+greet() { echo "hi $1"; }; greet there
+SH
+cat >"$FMT_CASES/4" <<'SH'
+( cd /tmp && echo "in $(basename "$PWD")" ) 2>&1; echo redirected >/dev/null 2>&1 & wait; echo `echo backtick` ${HOME:+set}
+SH
+cat >"$FMT_CASES/5" <<'SH'
+[[ -d /tmp && ( -n x || -z y ) ]] && echo test; echo a \
+  b; printf '%s\n' "it's" 'say "hi"' | cat; arr=(1 2 3); echo "${#arr[@]}"
+SH
+cat >"$FMT_CASES/6" <<'SH'
+true && echo aaaaaaaaaaaaaaaaaaaa && echo bbbbbbbbbbbbbbbbbbbbbbbbb && echo ccccccccccccccccccccccc && echo dddd
+SH
+for f in "$FMT_CASES"/*; do
+  node -e '
+    const M = require(process.argv[1]), fs = require("fs")
+    const r = M.formatScript(fs.readFileSync(process.argv[2], "utf8"))
+    if (!r.ok) { console.error(r.error); process.exit(1) }
+    fs.writeFileSync(process.argv[2] + ".out", r.script + "\n")
+    const again = M.formatScript(r.script)
+    fs.writeFileSync(process.argv[2] + ".again", (again.ok ? again.script : "!" + again.error) + "\n")
+  ' "$DIR/Model.js" "$f" 2>"$f.err" || { no "script $(basename "$f") formats" "$(cat "$f.err")" "ok"; continue; }
+  is "script $(basename "$f") still parses as bash" "$(bash -n "$f.out" 2>&1)" ""
+  is "and does what it did before" "$(cd "$WORK" && bash "$f.out" 2>&1)" "$(cd "$WORK" && bash "$f" 2>&1)"
+  is "and formatting it again changes nothing" "$(cat "$f.again")" "$(cat "$f.out")"
+done
+
+fmt() { node -e 'const r = require(process.argv[1]).formatScript(process.argv[2]); process.stdout.write(r.ok ? r.script : "!" + r.error)' "$DIR/Model.js" "$1"; }
+is "each command gets its own line" "$(fmt 'npm ci; npm run dev > log 2>&1 & php artisan serve')" \
+  "$(printf 'npm ci\nnpm run dev > log 2>&1 &\nphp artisan serve')"
+is "a block opens up, indented by two" "$(fmt '[ -f .env ] || { cp a .env; touch b; }')" \
+  "$(printf '[ -f .env ] || {\n  cp a .env\n  touch b\n}')"
+is "a long chain goes one command to a line" "$(fmt "$(cat "$FMT_CASES/6")")" \
+  "$(printf 'true &&\n  echo aaaaaaaaaaaaaaaaaaaa &&\n  echo bbbbbbbbbbbbbbbbbbbbbbbbb &&\n  echo ccccccccccccccccccccccc &&\n  echo dddd')"
+is "2>&1 is a redirection, not a background job" "$(fmt 'a 2>&1; b &>log; c >&2')" "$(printf 'a 2>&1\nb &>log\nc >&2')"
+is "a ; inside quotes or \$( ) stays put" "$(fmt "echo 'a; b' \"c; d\" \$(e; f)")" "echo 'a; b' \"c; d\" \$(e; f)"
+is "an unclosed quote is refused with its line" "$(fmt "$(printf 'ok\necho \"open')")" "!Line 2: a \" quote is never closed"
+is "a missing fi is refused" "$(fmt 'if true; then echo x')" "!Line 1: expected fi before the end"
+has "a here-document is refused" "$(fmt "$(printf 'cat <<EOF\nx\nEOF')")" "here-documents can't be formatted"
+has "case is refused" "$(fmt 'case $x in a) echo;; esac')" "case can't be formatted"
+has "(( )) is refused" "$(fmt '((i++))')" "(( )) can't be formatted"
+is "an empty script stays empty" "$(fmt '   ')" ""
+
+# The line a multi-line script becomes has to do exactly what the script
+# does, quotes and all -- run both and compare.
+script=$(printf '%s\n' "x='it'\"s\"" 'for w in a\\b "c d"; do' '  printf "[%s]" "$w"  # a comment' 'done' 'echo " $x"')
+line=$(node -e 'process.stdout.write(require(process.argv[1]).serveCommand(process.argv[2]))' "$DIR/Model.js" "$script")
+is "a multi-line script is typed as one line" "$(wc -l <<<"$line" | tr -d ' ')" "1"
+is "and runs as the script itself does" "$(bash -c "$line")" "$(bash -c "$script")"
+
 # ---- QML ------------------------------------------------------------------
 echo "qml"
 # The node cases below never touch the .qml files, and omarchy-shell swallows
@@ -1902,6 +1969,16 @@ cases.push(
     null],
   ["serveRequestFor is null with no agent at all",
     M.serveRequestFor({id: 1, stateType: "started"}, {agents: []}, [], {}, "up"), null],
+  ["a one-line script is left as it is", M.serveCommand("  npm run dev  "), "npm run dev"],
+  ["several lines go to eval as one bash script",
+    M.serveCommand("npm ci\nnpm run dev"), "eval $'npm ci\\nnpm run dev'"],
+  ["quotes, backslashes and tabs survive the quoting",
+    M.serveCommand("echo 'a' \"b\" c\\d\n\tdone"), "eval $'echo \\'a\\' \"b\" c\\\\d\\n\\tdone'"],
+  ["the request carries the eval'd script",
+    M.serveRequestFor({id: 1, stateType: "started"},
+      {agents: [{storyId: 1, cwd: "/r", workspaceId: "w1"}]}, [{id: "w1", label: "one"}],
+      {workspaceServe: {one: {upScript: "npm ci\nnpm run dev"}}}, "up").script,
+    "eval $'npm ci\\nnpm run dev'"],
   ["the settings UI writes one workspace's row in",
     JSON.stringify(M.nextWorkspaceServeConfig({}, "one", { upScript: "npm run dev" })),
     '{"one":{"upScript":"npm run dev","downScript":""}}'],

@@ -24,15 +24,38 @@ Item {
 
   property bool editing: false
 
+  // The workspace whose serve scripts are open on a page of their own
+  // (ServeScriptEditor), or "" for the settings themselves.
+  property string serveLabel: ""
+  readonly property string footerHint: pane.serveLabel !== ""
+    ? "Ctrl+S saves · Alt+F formats · Esc " + (serveEditor.item && serveEditor.item.dirty && serveEditor.item.editing
+        ? "leaves the box, again to cancel" : "cancels")
+    : ""
+
+  function openServe(label) {
+    pane.editing = false
+    pane.serveLabel = label
+  }
+
+  function closeServe() {
+    pane.serveLabel = ""
+    keys.forceActiveFocus()
+  }
+
   // New story beside Solve, then the list beside the bar.
   readonly property var pageColumns: Model.settingsPage(
     Model.showDevSettings(pane.store ? pane.store.linked : false, pane.settings))
 
-  function takeFocus() { keys.forceActiveFocus() }
+  function takeFocus() {
+    if (serveEditor.item) serveEditor.item.takeFocus()
+    else keys.forceActiveFocus()
+  }
 
   // A focused text field owns Escape, and gives it back rather than closing
-  // the panel out from under a half-typed team name.
+  // the panel out from under a half-typed team name. The scripts page is a
+  // step further in, so Esc there comes back to the settings first.
   function escapePressed() {
+    if (serveEditor.item) return serveEditor.item.escapePressed()
     if (pane.editing) { keys.forceActiveFocus(); return true }
     return false
   }
@@ -42,8 +65,32 @@ Item {
     anchors.fill: parent
     focus: true
 
+    Loader {
+      id: serveEditor
+      anchors.fill: parent
+      active: pane.serveLabel !== ""
+      sourceComponent: ServeScriptEditor {
+        readonly property var cfg: Model.serveConfigFor(pane.settings, pane.serveLabel)
+        label: pane.serveLabel
+        // Read once: a settings write while the page is open must not put
+        // back what is being typed.
+        Component.onCompleted: { upScript = cfg.up; downScript = cfg.down }
+        fg: pane.foreground
+        muted: pane.muted
+        accent: pane.accent
+        fontFamily: pane.fontFamily
+        onSaved: function(up, down) {
+          if (pane.store) pane.store.persistServeConfig(pane.serveLabel, { upScript: up, downScript: down })
+          pane.closeServe()
+        }
+        onCancelled: pane.closeServe()
+      }
+      onLoaded: Qt.callLater(function() { if (serveEditor.item) serveEditor.item.takeFocus() })
+    }
+
     ColumnLayout {
       anchors.fill: parent
+      visible: pane.serveLabel === ""
       spacing: Style.spacing.md
 
       RowLayout {
@@ -124,8 +171,7 @@ Item {
             muted: pane.muted
             accent: pane.accent
             fontFamily: pane.fontFamily
-            onChanged: function(label, patch) { if (pane.store) pane.store.persistServeConfig(label, patch) }
-            onEditingChanged: pane.editing = editing
+            onConfigure: function(label) { pane.openServe(label) }
           }
 
           // At the end of the page rather than pinned under it: a fixed line
