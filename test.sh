@@ -693,14 +693,26 @@ case "$1 $2" in
     printf '%s\n' '{"result":{"type":"tab_created","tab":{"tab_id":"w9:t9"},"root_pane":{"pane_id":"w9:p9"}}}'
     exit 0 ;;
   "tab list")
+    tabs="[]"
     if [[ -n ${HERDR_TAB_FOUND:-} ]]; then
-      printf '%s\n' '{"result":{"tabs":[{"tab_id":"w9:tS","label":"serve-sc-1234"}]}}'
-    else
-      printf '%s\n' '{"result":{"tabs":[]}}'
+      tabs=$(jq -c '. + [{"tab_id":"w9:tS","label":"serve-sc-1234"}]' <<<"$tabs")
     fi
+    if [[ -n ${HERDR_UP_TAB_ID:-} ]]; then
+      tabs=$(jq -c --arg id "$HERDR_UP_TAB_ID" \
+        '. + [{"tab_id":$id,"label":"serve-sc-1234"}]' <<<"$tabs")
+    fi
+    jq -cn --argjson tabs "$tabs" '{result: {tabs: $tabs}}'
     exit 0 ;;
   "tab focus") exit 0 ;;
+  "tab close") exit 0 ;;
   "pane run") printf '%s' "$4" > "$HERDR_FIX/run.txt"; exit 0 ;;
+  "pane wait-output")
+    if [[ -n ${HERDR_WAIT_LINE:-} ]]; then
+      jq -cn --arg line "$HERDR_WAIT_LINE" '{result: {matched_line: $line}}'
+      exit 0
+    fi
+    jq -cn '{error: {code: "timeout", message: "timed out waiting for output match"}}' >&2
+    exit 1 ;;
   "worktree list") cat "$HERDR_FIX/worktrees.json"; exit 0 ;;
   "worktree create")
     printf '%s\n' '{"result":{"type":"worktree_created","already_open":false,"workspace":{"workspace_id":"wT"},"tab":{"tab_id":"wT:t1"},"root_pane":{"pane_id":"wT:p1"},"worktree":{"path":"/tmp/wt","branch":"sc-1234"}}}'
@@ -725,8 +737,9 @@ cat >"$FIX/workspaces.json" <<'JSON'
 JSON
 cat >"$FIX/panes.json" <<'JSON'
 {"result":{"panes":[
-  {"pane_id":"w9:p1","workspace_id":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories"},
-  {"pane_id":"w2:p1","workspace_id":"w2","cwd":"/home/kimm/Projects/kvittering"}
+  {"pane_id":"w9:p1","workspace_id":"w9","tab_id":"w9:t1","cwd":"/home/kimm/Projects/omarchy-shortcut-stories"},
+  {"pane_id":"w2:p1","workspace_id":"w2","tab_id":"w2:t1","cwd":"/home/kimm/Projects/kvittering"},
+  {"pane_id":"w9:pS","workspace_id":"w9","tab_id":"w9:tS","cwd":"/home/kimm/Projects/omarchy-shortcut-stories"}
 ]}}
 JSON
 printf '%s\n' '{"result":{"agents":[{"agent":"grok","agent_status":"working","pane_id":"w9:p2"}]}}' >"$FIX/agents.json"
@@ -734,7 +747,7 @@ printf '%s\n' '{"result":{"worktrees":[]}}' >"$FIX/worktrees.json"
 : >"$WORK/herdr.log"
 solve() {
   PATH="$WORK/bin:$PATH" HERDR_LOG="$WORK/herdr.log" HERDR_FIX="$FIX" \
-    HERDR_START_CODE= HERDR_PROMPT_CODE= HERDR_ALREADY= \
+    HERDR_START_CODE= HERDR_PROMPT_CODE= HERDR_ALREADY= HERDR_WAIT_LINE= HERDR_UP_TAB_ID= \
     "$SOLVE" "$@"
 }
 reset_herdr() { : >"$WORK/herdr.log"; rm -f "$FIX/prompt.txt"; }
@@ -808,49 +821,85 @@ is "and herdr is not asked" "$(wc -l <"$WORK/herdr.log" | tr -d ' ')" "0"
 echo "serve"
 reset_herdr
 rm -f "$FIX/run.txt"
-out=$(printf '%s' '{"storyId":1234,"workspaceId":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories","command":"npm run dev","envPath":""}' \
+out=$(printf '%s' '{"storyId":1234,"workspaceId":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories","direction":"up","script":"npm run dev"}' \
   | solve serve)
-is "a fresh serve succeeds" "$(jq -r .ok <<<"$out")" "true"
+is "a fresh up succeeds" "$(jq -r .ok <<<"$out")" "true"
 is "and says it was created" "$(jq -r .created <<<"$out")" "true"
 has "it names the tab after the story" "$(cat "$WORK/herdr.log")" "--label serve-sc-1234"
 has "it opens at the agent's cwd" "$(cat "$WORK/herdr.log")" "--cwd /home/kimm/Projects/omarchy-shortcut-stories"
 has "it looked for an existing tab first" "$(cat "$WORK/herdr.log")" "tab list --workspace w9"
 has "it focused the new tab" "$(cat "$WORK/herdr.log")" "tab focus w9:t9"
-is "the command ran as typed" "$(cat "$FIX/run.txt")" "npm run dev"
+is "the up script ran as typed" "$(cat "$FIX/run.txt")" "npm run dev"
+has "it waits for the script to say where to look" "$(cat "$WORK/herdr.log")" "pane wait-output --regex"
+hasnt "nothing printed a url, so none comes back" "$out" '"url"'
+
+reset_herdr
+out=$(HERDR_WAIT_LINE="Local:   http://localhost:5173/, ready." \
+  PATH="$WORK/bin:$PATH" HERDR_LOG="$WORK/herdr.log" HERDR_FIX="$FIX" HERDR_TAB_FOUND=1 "$SOLVE" serve <<'JSON'
+{"storyId":1234,"workspaceId":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories","direction":"up","script":"npm run dev"}
+JSON
+)
+is "a url the script printed comes back" "$(jq -r .url <<<"$out")" "http://localhost:5173/"
 
 reset_herdr
 rm -f "$FIX/run.txt"
-out=$(printf '%s' '{"storyId":1234,"workspaceId":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories","command":"npm run dev","envPath":"/tmp/does-not-exist-anywhere.env"}' \
+out=$(printf '%s' '{"storyId":1234,"workspaceId":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories","direction":"down","script":"docker compose down"}' \
   | solve serve)
-is "a missing .env file is refused" "$(jq -r .code <<<"$out")" "usage"
+is "a fresh down succeeds" "$(jq -r .ok <<<"$out")" "true"
+has "it names the tab after the story, suffixed" "$(cat "$WORK/herdr.log")" "--label serve-sc-1234-down"
+has "the down script ran, a completion marker appended" "$(cat "$FIX/run.txt")" "docker compose down; printf"
+hasnt "down never reports a url" "$out" '"url"'
+hasnt "no marker means nothing is closed" "$out" '"closed"'
+hasnt "neither tab is closed without the marker" "$(cat "$WORK/herdr.log")" "tab close"
 
-ENV_FILE="$WORK/fixture.env"
-printf 'FOO=bar\n' >"$ENV_FILE"
 reset_herdr
-out=$(printf '%s' "{\"storyId\":1234,\"workspaceId\":\"w9\",\"cwd\":\"/home/kimm/Projects/omarchy-shortcut-stories\",\"command\":\"npm run dev\",\"envPath\":\"$ENV_FILE\"}" \
-  | solve serve)
-is "a configured .env succeeds" "$(jq -r .ok <<<"$out")" "true"
-has "it is sourced ahead of the command" "$(cat "$FIX/run.txt")" "set -a; source $ENV_FILE; set +a; npm run dev"
+rm -f "$FIX/run.txt"
+out=$(HERDR_WAIT_LINE=seen \
+  PATH="$WORK/bin:$PATH" HERDR_LOG="$WORK/herdr.log" HERDR_FIX="$FIX" "$SOLVE" serve <<'JSON'
+{"storyId":1234,"workspaceId":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories","direction":"down","script":"docker compose down"}
+JSON
+)
+is "down with a finished marker still succeeds" "$(jq -r .ok <<<"$out")" "true"
+is "and says both tabs are closed" "$(jq -r .closed <<<"$out")" "true"
+is "its own tab is closed" "$(grep -c '^tab close w9:t9$' "$WORK/herdr.log")" "1"
+is "there was no up tab to close, so only the one call" "$(grep -c '^tab close' "$WORK/herdr.log")" "1"
+
+reset_herdr
+rm -f "$FIX/run.txt"
+out=$(HERDR_WAIT_LINE=seen HERDR_UP_TAB_ID=w9:tU \
+  PATH="$WORK/bin:$PATH" HERDR_LOG="$WORK/herdr.log" HERDR_FIX="$FIX" "$SOLVE" serve <<'JSON'
+{"storyId":1234,"workspaceId":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories","direction":"down","script":"docker compose down"}
+JSON
+)
+is "down closes its own tab and up's" "$(jq -r .closed <<<"$out")" "true"
+has "its own tab" "$(cat "$WORK/herdr.log")" "tab close w9:t9"
+has "and up's tab too" "$(cat "$WORK/herdr.log")" "tab close w9:tU"
 
 reset_herdr
 out=$(HERDR_TAB_FOUND=1 PATH="$WORK/bin:$PATH" HERDR_LOG="$WORK/herdr.log" HERDR_FIX="$FIX" "$SOLVE" serve <<'JSON'
-{"storyId":1234,"workspaceId":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories","command":"npm run dev","envPath":""}
+{"storyId":1234,"workspaceId":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories","direction":"up","script":"npm run dev"}
 JSON
 )
 is "a repeat call succeeds" "$(jq -r .ok <<<"$out")" "true"
 is "and says it was not created" "$(jq -r .created <<<"$out")" "false"
 has "it still looked first" "$(cat "$WORK/herdr.log")" "tab list"
 has "and focused the one it found" "$(cat "$WORK/herdr.log")" "tab focus w9:tS"
+has "it resolves the existing tab's pane to wait on" "$(cat "$WORK/herdr.log")" "pane list --workspace w9"
 hasnt "no second tab is created" "$(cat "$WORK/herdr.log")" "tab create"
 hasnt "and nothing new is run" "$(cat "$WORK/herdr.log")" "pane run"
 
 reset_herdr
-out=$(printf '%s' '{"storyId":1234,"workspaceId":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories","command":"","envPath":""}' | solve serve)
-is "no command is refused" "$(jq -r .code <<<"$out")" "usage"
+out=$(printf '%s' '{"storyId":1234,"workspaceId":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories","direction":"up","script":""}' | solve serve)
+is "no script is refused" "$(jq -r .code <<<"$out")" "usage"
 is "and herdr is not asked" "$(wc -l <"$WORK/herdr.log" | tr -d ' ')" "0"
 
 reset_herdr
-out=$(printf '%s' '{"storyId":1234,"workspaceId":"w9","cwd":"relative/path","command":"npm run dev","envPath":""}' | solve serve)
+out=$(printf '%s' '{"storyId":1234,"workspaceId":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories","direction":"sideways","script":"npm run dev"}' \
+  | solve serve)
+is "a junk direction is refused" "$(jq -r .code <<<"$out")" "usage"
+
+reset_herdr
+out=$(printf '%s' '{"storyId":1234,"workspaceId":"w9","cwd":"relative/path","direction":"up","script":"npm run dev"}' | solve serve)
 is "a relative cwd is refused" "$(jq -r .code <<<"$out")" "usage"
 is "and herdr is not asked either" "$(wc -l <"$WORK/herdr.log" | tr -d ' ')" "0"
 
@@ -1787,11 +1836,11 @@ cases.push(
   ["the same PR written another way is not added twice",
     M.withPrLink(["https://github.com/a/b/pull/7/files"], "https://github.com/a/b/pull/7").length, 1],
 
-  // serve: running a workspace's dev command for a story already in Herdr
+  // serve: running a workspace's own up/down scripts for a story already in Herdr
   ["no settings, no map", JSON.stringify(M.workspaceServeConfig(null)), "{}"],
   ["the map rides along as given",
-    JSON.stringify(M.workspaceServeConfig({workspaceServe: {a: {serveCommand: "x"}}})),
-    '{"a":{"serveCommand":"x"}}'],
+    JSON.stringify(M.workspaceServeConfig({workspaceServe: {a: {upScript: "x"}}})),
+    '{"a":{"upScript":"x"}}'],
   ["a non-object value is not trusted as the map",
     JSON.stringify(M.workspaceServeConfig({workspaceServe: "nope"})), "{}"],
   ["a label is found by its workspace id",
@@ -1799,10 +1848,11 @@ cases.push(
   ["an unknown id has no label", M.workspaceLabelById([{id: "w1", label: "one"}], "w9"), ""],
   ["no workspaces, no label", M.workspaceLabelById(null, "w1"), ""],
   ["an unconfigured workspace is blank",
-    JSON.stringify(M.serveConfigFor({}, "one")), '{"command":"","envPath":""}'],
+    JSON.stringify(M.serveConfigFor({}, "one")), '{"up":"","down":""}'],
   ["a configured workspace comes back trimmed",
-    JSON.stringify(M.serveConfigFor({workspaceServe: {one: {serveCommand: "  npm run dev  ", envPath: " /e "}}}, "one")),
-    '{"command":"npm run dev","envPath":"/e"}'],
+    JSON.stringify(M.serveConfigFor(
+      {workspaceServe: {one: {upScript: "  npm run dev  ", downScript: " npm run stop "}}}, "one")),
+    '{"up":"npm run dev","down":"npm run stop"}'],
   ["not available before started", M.serveAvailable({stateType: "unstarted", id: 1}, null), false],
   ["not available with no agent",
     M.serveAvailable({stateType: "started", id: 1}, {agents: []}), false],
@@ -1811,50 +1861,64 @@ cases.push(
   ["available once done too",
     M.serveAvailable({stateType: "done", id: 1}, {agents: [{storyId: 1}]}), true],
   ["serveOpenable says why: not started or done",
-    M.serveOpenable({stateType: "unstarted", id: 1}, null, [], {}).reason,
+    M.serveOpenable({stateType: "unstarted", id: 1}, null, [], {}, "up").reason,
     "Serve needs the story in progress or done"],
   ["serveOpenable says why: nowhere to run it yet",
     M.serveOpenable({stateType: "started", id: 1},
-      {agents: [{storyId: 1, cwd: "", workspaceId: ""}]}, [], {}).reason,
+      {agents: [{storyId: 1, cwd: "", workspaceId: ""}]}, [], {}, "up").reason,
     "Herdr has not said where the agent is working yet"],
   ["serveOpenable says why: the workspace is gone",
     M.serveOpenable({stateType: "started", id: 1},
-      {agents: [{storyId: 1, cwd: "/r", workspaceId: "w1"}]}, [], {}).reason,
+      {agents: [{storyId: 1, cwd: "/r", workspaceId: "w1"}]}, [], {}, "up").reason,
     "That Herdr workspace is not open anymore"],
-  ["serveOpenable says why: nothing configured",
+  ["serveOpenable says why: nothing configured, named for its direction",
     M.serveOpenable({stateType: "started", id: 1},
-      {agents: [{storyId: 1, cwd: "/r", workspaceId: "w1"}]}, [{id: "w1", label: "one"}], {}).reason,
-    "No serve command is configured for one — set one in Settings"],
+      {agents: [{storyId: 1, cwd: "/r", workspaceId: "w1"}]}, [{id: "w1", label: "one"}], {}, "up").reason,
+    "No up script is configured for one — set one in Settings"],
+  ["and the same for down",
+    M.serveOpenable({stateType: "started", id: 1},
+      {agents: [{storyId: 1, cwd: "/r", workspaceId: "w1"}]}, [{id: "w1", label: "one"}], {}, "down").reason,
+    "No down script is configured for one — set one in Settings"],
+  ["up and down are configured independently",
+    M.serveOpenable({stateType: "started", id: 1},
+      {agents: [{storyId: 1, cwd: "/r", workspaceId: "w1"}]}, [{id: "w1", label: "one"}],
+      {workspaceServe: {one: {upScript: "npm run dev"}}}, "down").reason,
+    "No down script is configured for one — set one in Settings"],
   ["serveOpenable says yes once everything lines up",
     M.serveOpenable({stateType: "started", id: 1},
       {agents: [{storyId: 1, cwd: "/r", workspaceId: "w1"}]}, [{id: "w1", label: "one"}],
-      {workspaceServe: {one: {serveCommand: "npm run dev"}}}).ok,
+      {workspaceServe: {one: {upScript: "npm run dev"}}}, "up").ok,
     true],
-  ["serveRequestFor builds the body once configured",
+  ["serveRequestFor builds the up body once configured",
     JSON.stringify(M.serveRequestFor({id: 1234, stateType: "started"},
       {agents: [{storyId: 1234, cwd: "/r", workspaceId: "w1"}]}, [{id: "w1", label: "one"}],
-      {workspaceServe: {one: {serveCommand: "npm run dev", envPath: "/e"}}})),
-    '{"storyId":"1234","workspaceId":"w1","cwd":"/r","command":"npm run dev","envPath":"/e"}'],
+      {workspaceServe: {one: {upScript: "npm run dev", downScript: "npm run stop"}}}, "up")),
+    '{"storyId":"1234","workspaceId":"w1","cwd":"/r","direction":"up","script":"npm run dev"}'],
+  ["and the down body",
+    JSON.stringify(M.serveRequestFor({id: 1234, stateType: "started"},
+      {agents: [{storyId: 1234, cwd: "/r", workspaceId: "w1"}]}, [{id: "w1", label: "one"}],
+      {workspaceServe: {one: {upScript: "npm run dev", downScript: "npm run stop"}}}, "down")),
+    '{"storyId":"1234","workspaceId":"w1","cwd":"/r","direction":"down","script":"npm run stop"}'],
   ["serveRequestFor is null with nothing configured",
     M.serveRequestFor({id: 1, stateType: "started"},
-      {agents: [{storyId: 1, cwd: "/r", workspaceId: "w1"}]}, [{id: "w1", label: "one"}], {}),
+      {agents: [{storyId: 1, cwd: "/r", workspaceId: "w1"}]}, [{id: "w1", label: "one"}], {}, "up"),
     null],
   ["serveRequestFor is null with no agent at all",
-    M.serveRequestFor({id: 1, stateType: "started"}, {agents: []}, [], {}), null],
+    M.serveRequestFor({id: 1, stateType: "started"}, {agents: []}, [], {}, "up"), null],
   ["the settings UI writes one workspace's row in",
-    JSON.stringify(M.nextWorkspaceServeConfig({}, "one", { serveCommand: "npm run dev" })),
-    '{"one":{"serveCommand":"npm run dev","envPath":""}}'],
-  ["and leaves the other fields of that row alone",
+    JSON.stringify(M.nextWorkspaceServeConfig({}, "one", { upScript: "npm run dev" })),
+    '{"one":{"upScript":"npm run dev","downScript":""}}'],
+  ["and leaves the other script of that row alone",
     JSON.stringify(M.nextWorkspaceServeConfig(
-      {workspaceServe: {one: {serveCommand: "npm run dev", envPath: "/e"}}}, "one", { serveCommand: "yarn dev" })),
-    '{"one":{"serveCommand":"yarn dev","envPath":"/e"}}'],
+      {workspaceServe: {one: {upScript: "npm run dev", downScript: "npm run stop"}}}, "one", { upScript: "yarn dev" })),
+    '{"one":{"upScript":"yarn dev","downScript":"npm run stop"}}'],
   ["and leaves every other workspace's row alone",
     JSON.stringify(M.nextWorkspaceServeConfig(
-      {workspaceServe: {two: {serveCommand: "x"}}}, "one", { serveCommand: "npm run dev" })),
-    '{"two":{"serveCommand":"x"},"one":{"serveCommand":"npm run dev","envPath":""}}'],
-  ["blanking both fields drops the workspace from the map",
+      {workspaceServe: {two: {upScript: "x"}}}, "one", { upScript: "npm run dev" })),
+    '{"two":{"upScript":"x"},"one":{"upScript":"npm run dev","downScript":""}}'],
+  ["blanking both scripts drops the workspace from the map",
     JSON.stringify(M.nextWorkspaceServeConfig(
-      {workspaceServe: {one: {serveCommand: "npm run dev"}}}, "one", { serveCommand: "" })),
+      {workspaceServe: {one: {upScript: "npm run dev"}}}, "one", { upScript: "" })),
     "{}"],
   ["the review state follows in-progress",
     M.stateAfterPr(prRefs, {workflowStateId: 7002}).name, "Code Review"],

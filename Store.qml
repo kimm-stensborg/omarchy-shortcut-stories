@@ -650,18 +650,21 @@ Item {
       : "The agent is in Herdr"
   }
 
-  // ---- Serve: running a story's workspace's dev command in Herdr.
+  // ---- Serve: running a story's workspace's up/down scripts in Herdr.
 
   property bool serving: false
   property bool servePending: false
   property var servePendingStory: null
+  property string servePendingDirection: "up"
 
   // Takes the story itself (not root.detail): Serve is reachable straight
   // from a list row, which may not be the story currently open, if any is.
-  function launchServe(story) {
+  // direction is "up" or "down" -- each its own script, run independently.
+  function launchServe(story, direction) {
     if (!story || root.serving) return
     root.actionError = ""
     root.servePendingStory = story
+    root.servePendingDirection = direction === "down" ? "down" : "up"
     root.servePending = true
     // Same reasoning as armSolve: workspaces are fetched lazily, and a click
     // from the plain list may be the first time this session asks for them.
@@ -676,11 +679,12 @@ Item {
     if (!root.servePending) return
     root.servePending = false
     var story = root.servePendingStory
+    var direction = root.servePendingDirection
     root.servePendingStory = null
     if (!story) return
-    var can = Model.serveOpenable(story, root.solveStatus, root.workspaces, root.settings)
+    var can = Model.serveOpenable(story, root.solveStatus, root.workspaces, root.settings, direction)
     if (!can.ok) { root.actionError = can.reason; return }
-    var req = Model.serveRequestFor(story, root.solveStatus, root.workspaces, root.settings)
+    var req = Model.serveRequestFor(story, root.solveStatus, root.workspaces, root.settings, direction)
     if (!req) { root.actionError = "Could not build a serve request"; return }
     root.serving = true
     root.runWithStdin([root.solveCli, "serve"], ({}), JSON.stringify(req), root.takeServe)
@@ -689,8 +693,14 @@ Item {
   function takeServe(text) {
     root.serving = false
     var parsed = root.parse(text)
-    if (!parsed || parsed.ok !== true)
+    if (!parsed || parsed.ok !== true) {
       root.actionError = parsed && parsed.error ? parsed.error : "bin/solve gave no answer"
+      return
+    }
+    // Up's whole point is something to look at. bin/solve only ever sends a
+    // url once the script itself has printed one, so there is nothing here
+    // to decide -- just open whatever it said.
+    if (parsed.url) Quickshell.execDetached(["omarchy-launch-browser", String(parsed.url)])
   }
 
   function persistServeConfig(label, patch) {

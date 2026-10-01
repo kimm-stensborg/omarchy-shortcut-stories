@@ -752,22 +752,35 @@ Item {
             font.pixelSize: Style.font.body
           }
 
-          // Run the workspace's serve command for it. Visible whenever there
-          // is somewhere for it to run -- not whether one is configured,
-          // since the workspace list this needs to check that is not even
-          // fetched yet the first time the plain list is open. Clicking with
-          // nothing configured says so in the footer instead.
+          // Run the workspace's up or down script for it. Visible whenever
+          // there is somewhere for one to run -- not whether one is
+          // configured, since the workspace list this needs to check that is
+          // not even fetched yet the first time the plain list is open.
+          // Clicking with nothing configured says so in the footer instead.
           Button {
             visible: Model.serveAvailable(row.story, pane.store ? pane.store.solveStatus : null)
             Layout.preferredHeight: nameText.implicitHeight
             horizontalPadding: Style.space(2)
             verticalPadding: 0
             bordered: false
-            text: ""
-            tooltipText: "Run this workspace's serve command"
+            text: ""
+            tooltipText: "Run this workspace's up script, and open its URL once it prints one"
             foreground: pane.muted
             fontFamily: pane.fontFamily
-            onClicked: if (pane.store) pane.store.launchServe(row.story)
+            onClicked: if (pane.store) pane.store.launchServe(row.story, "up")
+          }
+
+          Button {
+            visible: Model.serveAvailable(row.story, pane.store ? pane.store.solveStatus : null)
+            Layout.preferredHeight: nameText.implicitHeight
+            horizontalPadding: Style.space(2)
+            verticalPadding: 0
+            bordered: false
+            text: ""
+            tooltipText: "Run this workspace's down script, and close both tabs once it finishes"
+            foreground: pane.muted
+            fontFamily: pane.fontFamily
+            onClicked: if (pane.store) pane.store.launchServe(row.story, "down")
           }
 
           // Whose it is, when the list is the whole team's.

@@ -165,7 +165,12 @@ Item {
         return
       }
       if (alt && event.key === Qt.Key_R) {
-        if (view.store) view.store.launchServe(view.detail)
+        if (view.store) view.store.launchServe(view.detail, "up")
+        event.accepted = true
+        return
+      }
+      if (alt && event.key === Qt.Key_D) {
+        if (view.store) view.store.launchServe(view.detail, "down")
         event.accepted = true
         return
       }
@@ -258,15 +263,25 @@ Item {
         }
 
         // Only once there is an agent to find a workspace+directory through
-        // -- same gate as the list row's icon.
+        // -- same gate as the list row's icons.
         Button {
           visible: !!view.detail && !!view.store && Model.serveAvailable(view.detail, view.store.solveStatus)
           bordered: true
-          text: "Serve"
-          tooltipText: "Run this workspace's serve command (Alt+R)"
+          text: "Up"
+          tooltipText: "Run this workspace's up script, and open its URL once it prints one (Alt+R)"
           foreground: view.accent
           fontFamily: view.fontFamily
-          onClicked: if (view.store) view.store.launchServe(view.detail)
+          onClicked: if (view.store) view.store.launchServe(view.detail, "up")
+        }
+
+        Button {
+          visible: !!view.detail && !!view.store && Model.serveAvailable(view.detail, view.store.solveStatus)
+          bordered: true
+          text: "Down"
+          tooltipText: "Run this workspace's down script, and close both tabs once it finishes (Alt+D)"
+          foreground: view.accent
+          fontFamily: view.fontFamily
+          onClicked: if (view.store) view.store.launchServe(view.detail, "down")
         }
       }
 

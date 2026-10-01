@@ -1,13 +1,14 @@
 import QtQuick
+import QtQuick.Layouts
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// One block, one row per Herdr workspace: a serve command and an optional
-// .env path for it. Not a Model.SETTINGS row -- the settings system there
-// only understands one scalar per key, and this is a map keyed by however
-// many workspaces happen to exist, so it is read and written with its own
-// small bit of code instead (see Store.qml's persistServeConfig).
+// One row per Herdr workspace: its name, and a Configure button that reveals
+// its up and down scripts. Not a Model.SETTINGS row -- the settings system
+// there only understands one scalar per key, and this is a map keyed by
+// however many workspaces happen to exist, so it is read and written with
+// its own small bit of code instead (see Store.qml's persistServeConfig).
 Item {
   id: root
 
@@ -16,12 +17,13 @@ Item {
 
   property color fg: Color.foreground
   property color muted: Qt.darker(Color.foreground, 1.5)
+  property color accent: Color.accent
   property string fontFamily: Style.font.family
 
   property var focusedField: null
   readonly property bool editing: focusedField !== null && focusedField.activeFocus
 
-  signal changed(string label, var patch)   // patch is {serveCommand: ...} or {envPath: ...}
+  signal changed(string label, var patch)   // patch is {upScript: ...} or {downScript: ...}
 
   function dropFocus() { root.focusedField = null }
 
@@ -64,50 +66,97 @@ Item {
       Column {
         id: wsRow
         required property var modelData
+        // Collapsed by default even for a workspace that already has scripts
+        // set -- a page that unfolds every row the moment it is opened reads
+        // as a wall of fields, not a list.
+        property bool expanded: false
         readonly property var cfg: Model.serveConfigFor(root.settings, modelData.label)
+        readonly property bool configured: cfg.up !== "" || cfg.down !== ""
         width: content.width
-        spacing: Style.space(6)
+        spacing: Style.space(8)
 
-        Text {
+        RowLayout {
           width: parent.width
-          elide: Text.ElideRight
-          textFormat: Text.PlainText
-          text: wsRow.modelData.label
-          color: root.fg
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.body
+          spacing: Style.space(8)
+
+          Text {
+            Layout.fillWidth: true
+            elide: Text.ElideRight
+            textFormat: Text.PlainText
+            text: wsRow.modelData.label
+            color: root.fg
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+          }
+
+          Rectangle {
+            visible: wsRow.configured
+            Layout.alignment: Qt.AlignVCenter
+            Layout.preferredWidth: Style.space(6)
+            Layout.preferredHeight: Style.space(6)
+            radius: width / 2
+            color: root.accent
+          }
+
+          Button {
+            bordered: wsRow.expanded
+            text: wsRow.expanded ? "Close" : "Configure"
+            foreground: wsRow.expanded ? root.accent : root.muted
+            fontFamily: root.fontFamily
+            onClicked: wsRow.expanded = !wsRow.expanded
+          }
         }
 
-        TextField {
+        Column {
+          visible: wsRow.expanded
           width: parent.width
-          text: wsRow.cfg.command
-          placeholderText: "Serve command, e.g. npm run dev"
-          foreground: root.fg
-          font.family: root.fontFamily
+          spacing: Style.space(4)
 
-          onActiveFocusChanged: {
-            if (activeFocus) root.focusedField = this
-            else if (root.focusedField === this) root.focusedField = null
+          Text {
+            text: "Up script"
+            color: root.muted
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
           }
-          onAccepted: { root.changed(wsRow.modelData.label, { serveCommand: text }); root.dropFocus() }
-          onEditingFinished: root.changed(wsRow.modelData.label, { serveCommand: text })
-          Keys.onEscapePressed: { text = wsRow.cfg.command; root.dropFocus() }
-        }
 
-        TextField {
-          width: parent.width
-          text: wsRow.cfg.envPath
-          placeholderText: ".env path (optional)"
-          foreground: root.fg
-          font.family: root.fontFamily
+          TextField {
+            width: parent.width
+            text: wsRow.cfg.up
+            placeholderText: "e.g. docker compose up -d"
+            foreground: root.fg
+            font.family: root.fontFamily
 
-          onActiveFocusChanged: {
-            if (activeFocus) root.focusedField = this
-            else if (root.focusedField === this) root.focusedField = null
+            onActiveFocusChanged: {
+              if (activeFocus) root.focusedField = this
+              else if (root.focusedField === this) root.focusedField = null
+            }
+            onAccepted: { root.changed(wsRow.modelData.label, { upScript: text }); root.dropFocus() }
+            onEditingFinished: root.changed(wsRow.modelData.label, { upScript: text })
+            Keys.onEscapePressed: { text = wsRow.cfg.up; root.dropFocus() }
           }
-          onAccepted: { root.changed(wsRow.modelData.label, { envPath: text }); root.dropFocus() }
-          onEditingFinished: root.changed(wsRow.modelData.label, { envPath: text })
-          Keys.onEscapePressed: { text = wsRow.cfg.envPath; root.dropFocus() }
+
+          Text {
+            text: "Down script"
+            color: root.muted
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          TextField {
+            width: parent.width
+            text: wsRow.cfg.down
+            placeholderText: "e.g. docker compose down"
+            foreground: root.fg
+            font.family: root.fontFamily
+
+            onActiveFocusChanged: {
+              if (activeFocus) root.focusedField = this
+              else if (root.focusedField === this) root.focusedField = null
+            }
+            onAccepted: { root.changed(wsRow.modelData.label, { downScript: text }); root.dropFocus() }
+            onEditingFinished: root.changed(wsRow.modelData.label, { downScript: text })
+            Keys.onEscapePressed: { text = wsRow.cfg.down; root.dropFocus() }
+          }
         }
       }
     }

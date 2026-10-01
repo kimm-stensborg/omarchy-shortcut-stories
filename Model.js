@@ -750,7 +750,8 @@ var KEY_HELP = [
     ["Ctrl + G", "Open its pull request on GitHub"],
     ["Alt + A", "Hand it to an agent"],
     ["Alt + P", "Push its branch and open a pull request"],
-    ["Alt + R", "Run its workspace's serve command"]] },
+    ["Alt + R", "Run its workspace's up script"],
+    ["Alt + D", "Run its workspace's down script"]] },
   { title: "Solve and pull request screens", keys: [
     ["Enter", "Start, or push and open"],
     ["Ctrl + Enter", "The same, from the text"],
@@ -2015,9 +2016,14 @@ function prDraft(detail, status) {
   }
 }
 
-// ---- Serve: running a workspace's dev command for a story already in Herdr.
+// ---- Serve: running a workspace's own up/down scripts for a story already in
+// Herdr. Up and down are two independent scripts, each run to completion in
+// its own named tab -- not one script Serve tries to interrupt and reuse.
+// Pairing them sensibly (an "up" that detaches, a "down" that tears down
+// whatever it started) is the script author's job, the same as it would be
+// for a real docker compose up/down.
 
-// The per-workspace serve map: {<workspace label>: {serveCommand, envPath}}.
+// The per-workspace serve map: {<workspace label>: {upScript, downScript}}.
 // No SETTINGS row and no manifest schema entry exist for it on purpose: the
 // settings system (coerceSetting/isDefaultSetting) only understands scalars,
 // and this is a map keyed by whatever workspaces happen to exist. Read
@@ -2040,7 +2046,7 @@ function workspaceLabelById(workspaces, id) {
 
 function serveConfigFor(settings, label) {
   var row = label ? workspaceServeConfig(settings)[label] : null
-  return { command: trim(row && row.serveCommand), envPath: trim(row && row.envPath) }
+  return { up: trim(row && row.upScript), down: trim(row && row.downScript) }
 }
 
 // Same gate the row's agent icon already uses: a story only grows a second
@@ -2051,9 +2057,10 @@ function serveAvailable(story, status) {
   return !!solveAgentFor(status, story && story.id)
 }
 
-// Why Alt+R (or a click) would have nothing to do, in the same {ok, reason}
-// shape prOpenable already uses for Alt+P.
-function serveOpenable(story, status, workspaces, settings) {
+// Why a click on Up or Down would have nothing to do, in the same
+// {ok, reason} shape prOpenable already uses for Alt+P. direction is "up" or
+// "down" -- each has its own script, so each is openable independently.
+function serveOpenable(story, status, workspaces, settings, direction) {
   if (!story) return { ok: false, reason: "" }
   if (!serveAvailable(story, status))
     return { ok: false, reason: "Serve needs the story in progress or done" }
@@ -2063,39 +2070,43 @@ function serveOpenable(story, status, workspaces, settings) {
   var label = workspaceLabelById(workspaces, agent.workspaceId)
   if (!label) return { ok: false, reason: "That Herdr workspace is not open anymore" }
   var cfg = serveConfigFor(settings, label)
-  if (!cfg.command)
-    return { ok: false, reason: "No serve command is configured for " + label + " — set one in Settings" }
+  var script = direction === "down" ? cfg.down : cfg.up
+  if (!script)
+    return { ok: false,
+      reason: "No " + direction + " script is configured for " + label + " — set one in Settings" }
   return { ok: true, reason: "" }
 }
 
 // What bin/solve serve is handed, once serveOpenable has already said yes.
-function serveRequestFor(story, status, workspaces, settings) {
+function serveRequestFor(story, status, workspaces, settings, direction) {
   var agent = solveAgentFor(status, story && story.id)
   if (!agent || !agent.cwd || !agent.workspaceId) return null
   var label = workspaceLabelById(workspaces, agent.workspaceId)
   var cfg = serveConfigFor(settings, label)
-  if (!cfg.command) return null
+  var script = direction === "down" ? cfg.down : cfg.up
+  if (!script) return null
   return {
     storyId: solveId(story.id),
     workspaceId: str(agent.workspaceId),
     cwd: str(agent.cwd),
-    command: cfg.command,
-    envPath: cfg.envPath
+    direction: direction === "down" ? "down" : "up",
+    script: script
   }
 }
 
-// The whole map, with one workspace's row merged in -- or dropped, once it is
-// blank again. The settings UI always writes the whole map back as one key.
+// The whole map, with one workspace's row merged in -- or dropped, once both
+// its scripts are blank again. The settings UI always writes the whole map
+// back as one key.
 function nextWorkspaceServeConfig(settings, label, patch) {
   var map = workspaceServeConfig(settings)
   var next = {}
   for (var k in map) next[k] = map[k]
   var current = next[label] || {}
   var merged = {
-    serveCommand: str(patch.serveCommand !== undefined ? patch.serveCommand : current.serveCommand),
-    envPath: str(patch.envPath !== undefined ? patch.envPath : current.envPath)
+    upScript: str(patch.upScript !== undefined ? patch.upScript : current.upScript),
+    downScript: str(patch.downScript !== undefined ? patch.downScript : current.downScript)
   }
-  if (!merged.serveCommand && !merged.envPath) delete next[label]
+  if (!merged.upScript && !merged.downScript) delete next[label]
   else next[label] = merged
   return next
 }

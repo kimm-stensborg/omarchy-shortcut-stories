@@ -6,8 +6,10 @@
 #   solve status         every agent Solve started, and how far its branch has got
 #   solve pr             read {url, branch, dir} on stdin: the story's pull request, via gh
 #   solve open-pr        read {dir, branch, base, title, body, draft}: push the branch, open its PR
-#   solve serve          read {storyId, workspaceId, cwd, command, envPath}: run (or
-#                        refocus) the workspace's serve command in its own tab
+#   solve serve          read {storyId, workspaceId, cwd, direction, script}: run (or
+#                        refocus) the workspace's up or down script in its own tab.
+#                        An "up" that prints a URL answers with it, once seen. A
+#                        down closes both tabs once it finishes, not just its own
 #
 # The object start reads is {workspaceId, cwd, worktree, kind, agent, branch,
 # prompt}. worktree true checks out branch sc-<id> beside the repo; false opens
@@ -342,55 +344,108 @@ cmd_open_pr() {
 }
 
 # Opens (or re-focuses) a tab in the story's own workspace+directory and runs
-# its workspace's configured serve command there -- a dev server, usually.
+# one of its workspace's two configured scripts there -- up or down, each its
+# own tab, each run to completion independently. Pairing them so down tears
+# down whatever up started (docker compose up -d / down, say) is the script's
+# job, not this one's: this never interrupts a running up to run down in the
+# same place, it just runs whichever script was asked for in a tab named for
+# that direction, so a second call for the same direction finds and focuses
+# the one from before instead of piling up another.
 # workspaceId/cwd come from the caller already knowing where the story's agent
-# is (see cmd_status): this never asks Herdr to find that itself. The tab is
-# named serve-sc-<id> so a second call finds and focuses the same one instead
-# of piling up another dev server next to it. Fire-and-forget: there is no
-# "stop", the same as Ctrl+C on any other terminal command.
+# is (see cmd_status): this never asks Herdr to find that itself.
+#
+# Up's whole point is something to look at, and the script -- "make sure the
+# server is running" -- is the one thing that knows its address, not a
+# setting the panel would have to keep in sync with it. So rather than ask
+# for a URL up front, this waits a little for the script's own output to say
+# one: most dev servers print "Local: http://localhost:3000" or similar the
+# moment they are ready, and Herdr can wait for exactly that line to appear
+# without this script polling for it by hand. An up whose script never
+# prints a URL (because it starts something you do not review in a browser)
+# just skips having one -- not an error, nothing to open.
+#
+# Down tears down what up started, so both tabs are done once it has: a
+# marker is appended after the down script and this waits for that marker --
+# not just for the script to be submitted -- before closing either tab,
+# because closing a tab ends whatever is still running in it, and a
+# half-finished teardown is worse than a tab left open a little longer. If
+# the marker never turns up (the script hangs, or takes longer than the
+# wait), neither tab is closed and "closed" comes back false -- down itself
+# still answers ok, since the script genuinely did run.
 cmd_serve() {
   cat >"$WORK/body.json"
-  local story ws cwd command envPath
+  local story ws cwd direction script
   story=$(jq -r '.storyId // ""' "$WORK/body.json") || fail "serve needs a JSON object" usage
   ws=$(jq -r '.workspaceId // ""' "$WORK/body.json")
   cwd=$(jq -r '.cwd // ""' "$WORK/body.json")
-  command=$(jq -r '.command // ""' "$WORK/body.json")
-  envPath=$(jq -r '.envPath // ""' "$WORK/body.json")
+  direction=$(jq -r '.direction // "up"' "$WORK/body.json")
+  script=$(jq -r '.script // ""' "$WORK/body.json")
 
   [[ $story =~ ^[0-9]+$ ]] || fail "serve needs a story id" usage
   [[ $ws =~ ^[A-Za-z0-9:_-]+$ ]] || fail "serve needs a workspace id" usage
   [[ -n $cwd && $cwd == /* && $cwd != *$'\n'* ]] || fail "serve needs a directory" usage
-  [[ -n $command && $command != *$'\n'* ]] || fail "No serve command is configured for this workspace" usage
-  [[ -z $envPath || ($envPath == /* && $envPath != *$'\n'*) ]] || fail "serve's .env path must be absolute" usage
-  [[ -z $envPath || -f $envPath ]] || fail "The configured .env file does not exist: $envPath" usage
+  [[ $direction == up || $direction == down ]] || fail "serve needs up or down" usage
+  [[ -n $script && $script != *$'\n'* ]] || fail "No $direction script is configured for this workspace" usage
 
   local label="serve-sc-$story"
-  local cmd="$command"
-  [[ -n $envPath ]] && cmd="set -a; source $(printf '%q' "$envPath"); set +a; $command"
+  local marker="__serve_down_${story}_done__"
+  [[ $direction == down ]] && label="serve-sc-$story-down"
 
   run_herdr tab list --workspace "$ws"
   require_herdr
-  local tab_id
+  local tab_id pane created=false
   tab_id=$(jq -r --arg label "$label" \
     '[.result.tabs[]? | select(.label == $label)] | .[0].tab_id // empty' "$WORK/out.json")
 
   if [[ -n $tab_id ]]; then
+    # Already running (up), or a previous down that never confirmed it
+    # finished: nothing new to submit, just find its pane again so either
+    # direction can still check on what it already asked for.
+    run_herdr pane list --workspace "$ws"
+    require_herdr
+    pane=$(jq -r --arg tab "$tab_id" \
+      '[.result.panes[]? | select(.tab_id == $tab)] | .[0].pane_id // empty' "$WORK/out.json")
     run_herdr tab focus "$tab_id"
-    jq -cn --arg tab "$tab_id" '{ok: true, created: false, tabId: $tab}'
-    return
+  else
+    run_herdr tab create --workspace "$ws" --cwd "$cwd" --label "$label" --no-focus
+    require_herdr
+    tab_id=$(jq -r '.result.tab.tab_id // empty' "$WORK/out.json")
+    pane=$(jq -r '.result.root_pane.pane_id // empty' "$WORK/out.json")
+    [[ -n $pane && -n $tab_id ]] || fail "Herdr did not return a tab" herdr
+
+    local to_run="$script"
+    [[ $direction == down ]] && to_run="$script; printf '%s\n' $marker"
+    run_herdr pane run "$pane" "$to_run" ||
+      fail "The tab opened, but Herdr would not run the $direction script: $(herdr_message)" herdr
+    run_herdr tab focus "$tab_id"
+    created=true
   fi
 
-  run_herdr tab create --workspace "$ws" --cwd "$cwd" --label "$label" --no-focus
-  require_herdr
-  local pane
-  tab_id=$(jq -r '.result.tab.tab_id // empty' "$WORK/out.json")
-  pane=$(jq -r '.result.root_pane.pane_id // empty' "$WORK/out.json")
-  [[ -n $pane && -n $tab_id ]] || fail "Herdr did not return a tab" herdr
+  local url="" closed=false
+  if [[ $direction == up ]]; then
+    if [[ -n $pane ]] && run_herdr pane wait-output --regex 'https?://\S+' --timeout 12000 "$pane"; then
+      url=$(jq -r '.result.matched_line // ""' "$WORK/out.json" |
+        grep -oE 'https?://[^[:space:]]+' | head -1 | sed -E 's/[]).,;:!?[]+$//')
+    fi
+  else
+    if [[ -n $pane ]] && run_herdr pane wait-output --match "$marker" --timeout 30000 "$pane"; then
+      run_herdr tab close "$tab_id"
+      # Up's tab, if there is one, has nothing left to run now either.
+      run_herdr tab list --workspace "$ws"
+      if [[ $HERDR_STATUS -eq 0 ]]; then
+        local up_tab
+        up_tab=$(jq -r --arg label "serve-sc-$story" \
+          '[.result.tabs[]? | select(.label == $label)] | .[0].tab_id // empty' "$WORK/out.json")
+        [[ -n $up_tab ]] && run_herdr tab close "$up_tab"
+      fi
+      closed=true
+    fi
+  fi
 
-  run_herdr pane run "$pane" "$cmd" ||
-    fail "The tab opened, but Herdr would not run the serve command: $(herdr_message)" herdr
-  run_herdr tab focus "$tab_id"
-  jq -cn --arg tab "$tab_id" '{ok: true, created: true, tabId: $tab}'
+  jq -cn --arg tab "$tab_id" --argjson created "$created" --arg url "$url" --argjson closed "$closed" \
+    '{ok: true, created: $created, tabId: $tab}
+     + (if $url != "" then {url: $url} else {} end)
+     + (if $closed then {closed: true} else {} end)'
 }
 
 case ${1:-} in

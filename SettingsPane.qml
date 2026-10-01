@@ -122,6 +122,7 @@ Item {
             settings: pane.settings
             fg: pane.foreground
             muted: pane.muted
+            accent: pane.accent
             fontFamily: pane.fontFamily
             onChanged: function(label, patch) { if (pane.store) pane.store.persistServeConfig(label, patch) }
             onEditingChanged: pane.editing = editing
