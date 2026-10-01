@@ -749,7 +749,8 @@ var KEY_HELP = [
     ["Ctrl + O", "Open it in Shortcut"],
     ["Ctrl + G", "Open its pull request on GitHub"],
     ["Alt + A", "Hand it to an agent"],
-    ["Alt + P", "Push its branch and open a pull request"]] },
+    ["Alt + P", "Push its branch and open a pull request"],
+    ["Alt + R", "Run its workspace's serve command"]] },
   { title: "Solve and pull request screens", keys: [
     ["Enter", "Start, or push and open"],
     ["Ctrl + Enter", "The same, from the text"],
@@ -2014,6 +2015,91 @@ function prDraft(detail, status) {
   }
 }
 
+// ---- Serve: running a workspace's dev command for a story already in Herdr.
+
+// The per-workspace serve map: {<workspace label>: {serveCommand, envPath}}.
+// No SETTINGS row and no manifest schema entry exist for it on purpose: the
+// settings system (coerceSetting/isDefaultSetting) only understands scalars,
+// and this is a map keyed by whatever workspaces happen to exist. Read
+// straight off settings, the same way the separate "agents" plugin's
+// `providers` map is read off its own settings with no schema entry either.
+function workspaceServeConfig(settings) {
+  return (settings && typeof settings.workspaceServe === "object" && settings.workspaceServe) || {}
+}
+
+// Herdr workspace ids are not stable across a restart; the label is what the
+// setting is keyed by (same reasoning as solveWorkspace), so an agent's
+// workspaceId has to be turned back into a label before the map means
+// anything.
+function workspaceLabelById(workspaces, id) {
+  var list = workspaces || []
+  for (var i = 0; i < list.length; i++)
+    if (str(list[i].id) === str(id)) return str(list[i].label)
+  return ""
+}
+
+function serveConfigFor(settings, label) {
+  var row = label ? workspaceServeConfig(settings)[label] : null
+  return { command: trim(row && row.serveCommand), envPath: trim(row && row.envPath) }
+}
+
+// Same gate the row's agent icon already uses: a story only grows a second
+// action once there is somewhere for it to run.
+function serveAvailable(story, status) {
+  var stateType = str(story && story.stateType)
+  if (stateType !== "started" && stateType !== "done") return false
+  return !!solveAgentFor(status, story && story.id)
+}
+
+// Why Alt+R (or a click) would have nothing to do, in the same {ok, reason}
+// shape prOpenable already uses for Alt+P.
+function serveOpenable(story, status, workspaces, settings) {
+  if (!story) return { ok: false, reason: "" }
+  if (!serveAvailable(story, status))
+    return { ok: false, reason: "Serve needs the story in progress or done" }
+  var agent = solveAgentFor(status, story.id)
+  if (!agent.cwd || !agent.workspaceId)
+    return { ok: false, reason: "Herdr has not said where the agent is working yet" }
+  var label = workspaceLabelById(workspaces, agent.workspaceId)
+  if (!label) return { ok: false, reason: "That Herdr workspace is not open anymore" }
+  var cfg = serveConfigFor(settings, label)
+  if (!cfg.command)
+    return { ok: false, reason: "No serve command is configured for " + label + " — set one in Settings" }
+  return { ok: true, reason: "" }
+}
+
+// What bin/solve serve is handed, once serveOpenable has already said yes.
+function serveRequestFor(story, status, workspaces, settings) {
+  var agent = solveAgentFor(status, story && story.id)
+  if (!agent || !agent.cwd || !agent.workspaceId) return null
+  var label = workspaceLabelById(workspaces, agent.workspaceId)
+  var cfg = serveConfigFor(settings, label)
+  if (!cfg.command) return null
+  return {
+    storyId: solveId(story.id),
+    workspaceId: str(agent.workspaceId),
+    cwd: str(agent.cwd),
+    command: cfg.command,
+    envPath: cfg.envPath
+  }
+}
+
+// The whole map, with one workspace's row merged in -- or dropped, once it is
+// blank again. The settings UI always writes the whole map back as one key.
+function nextWorkspaceServeConfig(settings, label, patch) {
+  var map = workspaceServeConfig(settings)
+  var next = {}
+  for (var k in map) next[k] = map[k]
+  var current = next[label] || {}
+  var merged = {
+    serveCommand: str(patch.serveCommand !== undefined ? patch.serveCommand : current.serveCommand),
+    envPath: str(patch.envPath !== undefined ? patch.envPath : current.envPath)
+  }
+  if (!merged.serveCommand && !merged.envPath) delete next[label]
+  else next[label] = merged
+  return next
+}
+
 // The story's links with the new PR added, once. Every link it already had
 // stays, in its place.
 function withPrLink(links, url) {
@@ -2112,6 +2198,9 @@ if (typeof module !== "undefined") {
     solveBranchLabel: solveBranchLabel, solveProgress: solveProgress,
     solveNeedsYou: solveNeedsYou, solveAcks: solveAcks, solveBarStatus: solveBarStatus,
     prLookupFor: prLookupFor, prStatusLabel: prStatusLabel,
-    prOpenable: prOpenable, prDraft: prDraft, withPrLink: withPrLink, stateAfterPr: stateAfterPr
+    prOpenable: prOpenable, prDraft: prDraft, withPrLink: withPrLink, stateAfterPr: stateAfterPr,
+    workspaceServeConfig: workspaceServeConfig, workspaceLabelById: workspaceLabelById,
+    serveConfigFor: serveConfigFor, serveAvailable: serveAvailable, serveOpenable: serveOpenable,
+    serveRequestFor: serveRequestFor, nextWorkspaceServeConfig: nextWorkspaceServeConfig
   }
 }

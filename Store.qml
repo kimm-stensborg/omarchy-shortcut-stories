@@ -577,10 +577,16 @@ Item {
         root.solveReview = false
         root.solveError = parsed && parsed.error ? parsed.error : "Herdr gave no answer"
       }
+      if (root.servePending) {
+        root.servePending = false
+        root.servePendingStory = null
+        root.actionError = parsed && parsed.error ? parsed.error : "Herdr gave no answer"
+      }
       return
     }
     root.workspaces = parsed.workspaces || []
     if (root.solvePending) root.continueSolve()
+    if (root.servePending) root.continueServe()
   }
 
   // Opens the review. Nothing is started until that screen says so.
@@ -642,6 +648,54 @@ Item {
     root.solveError = parsed.status === "blocked"
       ? "Herdr is waiting for an answer"
       : "The agent is in Herdr"
+  }
+
+  // ---- Serve: running a story's workspace's dev command in Herdr.
+
+  property bool serving: false
+  property bool servePending: false
+  property var servePendingStory: null
+
+  // Takes the story itself (not root.detail): Serve is reachable straight
+  // from a list row, which may not be the story currently open, if any is.
+  function launchServe(story) {
+    if (!story || root.serving) return
+    root.actionError = ""
+    root.servePendingStory = story
+    root.servePending = true
+    // Same reasoning as armSolve: workspaces are fetched lazily, and a click
+    // from the plain list may be the first time this session asks for them.
+    if (root.workspaces && root.workspaces.length && !root.loadingWorkspaces) {
+      root.continueServe()
+      return
+    }
+    if (!root.loadingWorkspaces) root.refreshWorkspaces()
+  }
+
+  function continueServe() {
+    if (!root.servePending) return
+    root.servePending = false
+    var story = root.servePendingStory
+    root.servePendingStory = null
+    if (!story) return
+    var can = Model.serveOpenable(story, root.solveStatus, root.workspaces, root.settings)
+    if (!can.ok) { root.actionError = can.reason; return }
+    var req = Model.serveRequestFor(story, root.solveStatus, root.workspaces, root.settings)
+    if (!req) { root.actionError = "Could not build a serve request"; return }
+    root.serving = true
+    root.runWithStdin([root.solveCli, "serve"], ({}), JSON.stringify(req), root.takeServe)
+  }
+
+  function takeServe(text) {
+    root.serving = false
+    var parsed = root.parse(text)
+    if (!parsed || parsed.ok !== true)
+      root.actionError = parsed && parsed.error ? parsed.error : "bin/solve gave no answer"
+  }
+
+  function persistServeConfig(label, patch) {
+    if (!label) return
+    root.persist("workspaceServe", Model.nextWorkspaceServeConfig(root.settings, label, patch))
   }
 
   // Where each Solve agent has got to: Herdr's status and its branch, from

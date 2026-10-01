@@ -164,6 +164,11 @@ Item {
         event.accepted = true
         return
       }
+      if (alt && event.key === Qt.Key_R) {
+        if (view.store) view.store.launchServe(view.detail)
+        event.accepted = true
+        return
+      }
       if (!view.moveStates.length) return
 
       if (event.key === Qt.Key_Left) {
@@ -250,6 +255,18 @@ Item {
           foreground: view.accent
           fontFamily: view.fontFamily
           onClicked: if (view.store) view.store.armPr()
+        }
+
+        // Only once there is an agent to find a workspace+directory through
+        // -- same gate as the list row's icon.
+        Button {
+          visible: !!view.detail && !!view.store && Model.serveAvailable(view.detail, view.store.solveStatus)
+          bordered: true
+          text: "Serve"
+          tooltipText: "Run this workspace's serve command (Alt+R)"
+          foreground: view.accent
+          fontFamily: view.fontFamily
+          onClicked: if (view.store) view.store.launchServe(view.detail)
         }
       }
 

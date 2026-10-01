@@ -6,6 +6,8 @@
 #   solve status         every agent Solve started, and how far its branch has got
 #   solve pr             read {url, branch, dir} on stdin: the story's pull request, via gh
 #   solve open-pr        read {dir, branch, base, title, body, draft}: push the branch, open its PR
+#   solve serve          read {storyId, workspaceId, cwd, command, envPath}: run (or
+#                        refocus) the workspace's serve command in its own tab
 #
 # The object start reads is {workspaceId, cwd, worktree, kind, agent, branch,
 # prompt}. worktree true checks out branch sc-<id> beside the repo; false opens
@@ -339,11 +341,64 @@ cmd_open_pr() {
   jq -cn --arg url "$url" '{ok: true, url: $url, number: ($url | capture("/pull/(?<n>[0-9]+)$").n | tonumber)}'
 }
 
+# Opens (or re-focuses) a tab in the story's own workspace+directory and runs
+# its workspace's configured serve command there -- a dev server, usually.
+# workspaceId/cwd come from the caller already knowing where the story's agent
+# is (see cmd_status): this never asks Herdr to find that itself. The tab is
+# named serve-sc-<id> so a second call finds and focuses the same one instead
+# of piling up another dev server next to it. Fire-and-forget: there is no
+# "stop", the same as Ctrl+C on any other terminal command.
+cmd_serve() {
+  cat >"$WORK/body.json"
+  local story ws cwd command envPath
+  story=$(jq -r '.storyId // ""' "$WORK/body.json") || fail "serve needs a JSON object" usage
+  ws=$(jq -r '.workspaceId // ""' "$WORK/body.json")
+  cwd=$(jq -r '.cwd // ""' "$WORK/body.json")
+  command=$(jq -r '.command // ""' "$WORK/body.json")
+  envPath=$(jq -r '.envPath // ""' "$WORK/body.json")
+
+  [[ $story =~ ^[0-9]+$ ]] || fail "serve needs a story id" usage
+  [[ $ws =~ ^[A-Za-z0-9:_-]+$ ]] || fail "serve needs a workspace id" usage
+  [[ -n $cwd && $cwd == /* && $cwd != *$'\n'* ]] || fail "serve needs a directory" usage
+  [[ -n $command && $command != *$'\n'* ]] || fail "No serve command is configured for this workspace" usage
+  [[ -z $envPath || ($envPath == /* && $envPath != *$'\n'*) ]] || fail "serve's .env path must be absolute" usage
+  [[ -z $envPath || -f $envPath ]] || fail "The configured .env file does not exist: $envPath" usage
+
+  local label="serve-sc-$story"
+  local cmd="$command"
+  [[ -n $envPath ]] && cmd="set -a; source $(printf '%q' "$envPath"); set +a; $command"
+
+  run_herdr tab list --workspace "$ws"
+  require_herdr
+  local tab_id
+  tab_id=$(jq -r --arg label "$label" \
+    '[.result.tabs[]? | select(.label == $label)] | .[0].tab_id // empty' "$WORK/out.json")
+
+  if [[ -n $tab_id ]]; then
+    run_herdr tab focus "$tab_id"
+    jq -cn --arg tab "$tab_id" '{ok: true, created: false, tabId: $tab}'
+    return
+  fi
+
+  run_herdr tab create --workspace "$ws" --cwd "$cwd" --label "$label" --no-focus
+  require_herdr
+  local pane
+  tab_id=$(jq -r '.result.tab.tab_id // empty' "$WORK/out.json")
+  pane=$(jq -r '.result.root_pane.pane_id // empty' "$WORK/out.json")
+  [[ -n $pane && -n $tab_id ]] || fail "Herdr did not return a tab" herdr
+
+  run_herdr pane run "$pane" "$cmd" ||
+    fail "The tab opened, but Herdr would not run the serve command: $(herdr_message)" herdr
+  run_herdr tab focus "$tab_id"
+  jq -cn --arg tab "$tab_id" '{ok: true, created: true, tabId: $tab}'
+}
+
 case ${1:-} in
   workspaces) cmd_workspaces ;;
   start) cmd_start ;;
   status) cmd_status ;;
   pr) cmd_pr ;;
   open-pr) cmd_open_pr ;;
-  *) fail "usage: solve workspaces | solve start | solve status | solve pr | solve open-pr" usage ;;
+  serve) cmd_serve ;;
+  *) fail "usage: solve workspaces | solve start | solve status | solve pr | solve open-pr | solve serve" usage ;;
 esac

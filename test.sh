@@ -692,6 +692,15 @@ case "$1 $2" in
   "tab create")
     printf '%s\n' '{"result":{"type":"tab_created","tab":{"tab_id":"w9:t9"},"root_pane":{"pane_id":"w9:p9"}}}'
     exit 0 ;;
+  "tab list")
+    if [[ -n ${HERDR_TAB_FOUND:-} ]]; then
+      printf '%s\n' '{"result":{"tabs":[{"tab_id":"w9:tS","label":"serve-sc-1234"}]}}'
+    else
+      printf '%s\n' '{"result":{"tabs":[]}}'
+    fi
+    exit 0 ;;
+  "tab focus") exit 0 ;;
+  "pane run") printf '%s' "$4" > "$HERDR_FIX/run.txt"; exit 0 ;;
   "worktree list") cat "$HERDR_FIX/worktrees.json"; exit 0 ;;
   "worktree create")
     printf '%s\n' '{"result":{"type":"worktree_created","already_open":false,"workspace":{"workspace_id":"wT"},"tab":{"tab_id":"wT:t1"},"root_pane":{"pane_id":"wT:p1"},"worktree":{"path":"/tmp/wt","branch":"sc-1234"}}}'
@@ -794,6 +803,56 @@ reset_herdr
 out=$(printf '%s' '{"workspaceId":"w9","kind":"nope","agent":"s1","branch":"sc-1","prompt":"go"}' | solve start)
 is "an unknown agent is refused" "$(jq -r .code <<<"$out")" "usage"
 is "and herdr is not asked" "$(wc -l <"$WORK/herdr.log" | tr -d ' ')" "0"
+
+# ---- serve -----------------------------------------------------------------
+echo "serve"
+reset_herdr
+rm -f "$FIX/run.txt"
+out=$(printf '%s' '{"storyId":1234,"workspaceId":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories","command":"npm run dev","envPath":""}' \
+  | solve serve)
+is "a fresh serve succeeds" "$(jq -r .ok <<<"$out")" "true"
+is "and says it was created" "$(jq -r .created <<<"$out")" "true"
+has "it names the tab after the story" "$(cat "$WORK/herdr.log")" "--label serve-sc-1234"
+has "it opens at the agent's cwd" "$(cat "$WORK/herdr.log")" "--cwd /home/kimm/Projects/omarchy-shortcut-stories"
+has "it looked for an existing tab first" "$(cat "$WORK/herdr.log")" "tab list --workspace w9"
+has "it focused the new tab" "$(cat "$WORK/herdr.log")" "tab focus w9:t9"
+is "the command ran as typed" "$(cat "$FIX/run.txt")" "npm run dev"
+
+reset_herdr
+rm -f "$FIX/run.txt"
+out=$(printf '%s' '{"storyId":1234,"workspaceId":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories","command":"npm run dev","envPath":"/tmp/does-not-exist-anywhere.env"}' \
+  | solve serve)
+is "a missing .env file is refused" "$(jq -r .code <<<"$out")" "usage"
+
+ENV_FILE="$WORK/fixture.env"
+printf 'FOO=bar\n' >"$ENV_FILE"
+reset_herdr
+out=$(printf '%s' "{\"storyId\":1234,\"workspaceId\":\"w9\",\"cwd\":\"/home/kimm/Projects/omarchy-shortcut-stories\",\"command\":\"npm run dev\",\"envPath\":\"$ENV_FILE\"}" \
+  | solve serve)
+is "a configured .env succeeds" "$(jq -r .ok <<<"$out")" "true"
+has "it is sourced ahead of the command" "$(cat "$FIX/run.txt")" "set -a; source $ENV_FILE; set +a; npm run dev"
+
+reset_herdr
+out=$(HERDR_TAB_FOUND=1 PATH="$WORK/bin:$PATH" HERDR_LOG="$WORK/herdr.log" HERDR_FIX="$FIX" "$SOLVE" serve <<'JSON'
+{"storyId":1234,"workspaceId":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories","command":"npm run dev","envPath":""}
+JSON
+)
+is "a repeat call succeeds" "$(jq -r .ok <<<"$out")" "true"
+is "and says it was not created" "$(jq -r .created <<<"$out")" "false"
+has "it still looked first" "$(cat "$WORK/herdr.log")" "tab list"
+has "and focused the one it found" "$(cat "$WORK/herdr.log")" "tab focus w9:tS"
+hasnt "no second tab is created" "$(cat "$WORK/herdr.log")" "tab create"
+hasnt "and nothing new is run" "$(cat "$WORK/herdr.log")" "pane run"
+
+reset_herdr
+out=$(printf '%s' '{"storyId":1234,"workspaceId":"w9","cwd":"/home/kimm/Projects/omarchy-shortcut-stories","command":"","envPath":""}' | solve serve)
+is "no command is refused" "$(jq -r .code <<<"$out")" "usage"
+is "and herdr is not asked" "$(wc -l <"$WORK/herdr.log" | tr -d ' ')" "0"
+
+reset_herdr
+out=$(printf '%s' '{"storyId":1234,"workspaceId":"w9","cwd":"relative/path","command":"npm run dev","envPath":""}' | solve serve)
+is "a relative cwd is refused" "$(jq -r .code <<<"$out")" "usage"
+is "and herdr is not asked either" "$(wc -l <"$WORK/herdr.log" | tr -d ' ')" "0"
 
 # status: a throwaway repo with main and sc-1234 two commits ahead, checked
 # out and with an edit not committed yet.
@@ -1727,6 +1786,76 @@ cases.push(
     '["https://figma.com/f","https://github.com/a/b/pull/7"]'],
   ["the same PR written another way is not added twice",
     M.withPrLink(["https://github.com/a/b/pull/7/files"], "https://github.com/a/b/pull/7").length, 1],
+
+  // serve: running a workspace's dev command for a story already in Herdr
+  ["no settings, no map", JSON.stringify(M.workspaceServeConfig(null)), "{}"],
+  ["the map rides along as given",
+    JSON.stringify(M.workspaceServeConfig({workspaceServe: {a: {serveCommand: "x"}}})),
+    '{"a":{"serveCommand":"x"}}'],
+  ["a non-object value is not trusted as the map",
+    JSON.stringify(M.workspaceServeConfig({workspaceServe: "nope"})), "{}"],
+  ["a label is found by its workspace id",
+    M.workspaceLabelById([{id: "w1", label: "one"}, {id: "w2", label: "two"}], "w2"), "two"],
+  ["an unknown id has no label", M.workspaceLabelById([{id: "w1", label: "one"}], "w9"), ""],
+  ["no workspaces, no label", M.workspaceLabelById(null, "w1"), ""],
+  ["an unconfigured workspace is blank",
+    JSON.stringify(M.serveConfigFor({}, "one")), '{"command":"","envPath":""}'],
+  ["a configured workspace comes back trimmed",
+    JSON.stringify(M.serveConfigFor({workspaceServe: {one: {serveCommand: "  npm run dev  ", envPath: " /e "}}}, "one")),
+    '{"command":"npm run dev","envPath":"/e"}'],
+  ["not available before started", M.serveAvailable({stateType: "unstarted", id: 1}, null), false],
+  ["not available with no agent",
+    M.serveAvailable({stateType: "started", id: 1}, {agents: []}), false],
+  ["available once started, with an agent",
+    M.serveAvailable({stateType: "started", id: 1}, {agents: [{storyId: 1}]}), true],
+  ["available once done too",
+    M.serveAvailable({stateType: "done", id: 1}, {agents: [{storyId: 1}]}), true],
+  ["serveOpenable says why: not started or done",
+    M.serveOpenable({stateType: "unstarted", id: 1}, null, [], {}).reason,
+    "Serve needs the story in progress or done"],
+  ["serveOpenable says why: nowhere to run it yet",
+    M.serveOpenable({stateType: "started", id: 1},
+      {agents: [{storyId: 1, cwd: "", workspaceId: ""}]}, [], {}).reason,
+    "Herdr has not said where the agent is working yet"],
+  ["serveOpenable says why: the workspace is gone",
+    M.serveOpenable({stateType: "started", id: 1},
+      {agents: [{storyId: 1, cwd: "/r", workspaceId: "w1"}]}, [], {}).reason,
+    "That Herdr workspace is not open anymore"],
+  ["serveOpenable says why: nothing configured",
+    M.serveOpenable({stateType: "started", id: 1},
+      {agents: [{storyId: 1, cwd: "/r", workspaceId: "w1"}]}, [{id: "w1", label: "one"}], {}).reason,
+    "No serve command is configured for one — set one in Settings"],
+  ["serveOpenable says yes once everything lines up",
+    M.serveOpenable({stateType: "started", id: 1},
+      {agents: [{storyId: 1, cwd: "/r", workspaceId: "w1"}]}, [{id: "w1", label: "one"}],
+      {workspaceServe: {one: {serveCommand: "npm run dev"}}}).ok,
+    true],
+  ["serveRequestFor builds the body once configured",
+    JSON.stringify(M.serveRequestFor({id: 1234, stateType: "started"},
+      {agents: [{storyId: 1234, cwd: "/r", workspaceId: "w1"}]}, [{id: "w1", label: "one"}],
+      {workspaceServe: {one: {serveCommand: "npm run dev", envPath: "/e"}}})),
+    '{"storyId":"1234","workspaceId":"w1","cwd":"/r","command":"npm run dev","envPath":"/e"}'],
+  ["serveRequestFor is null with nothing configured",
+    M.serveRequestFor({id: 1, stateType: "started"},
+      {agents: [{storyId: 1, cwd: "/r", workspaceId: "w1"}]}, [{id: "w1", label: "one"}], {}),
+    null],
+  ["serveRequestFor is null with no agent at all",
+    M.serveRequestFor({id: 1, stateType: "started"}, {agents: []}, [], {}), null],
+  ["the settings UI writes one workspace's row in",
+    JSON.stringify(M.nextWorkspaceServeConfig({}, "one", { serveCommand: "npm run dev" })),
+    '{"one":{"serveCommand":"npm run dev","envPath":""}}'],
+  ["and leaves the other fields of that row alone",
+    JSON.stringify(M.nextWorkspaceServeConfig(
+      {workspaceServe: {one: {serveCommand: "npm run dev", envPath: "/e"}}}, "one", { serveCommand: "yarn dev" })),
+    '{"one":{"serveCommand":"yarn dev","envPath":"/e"}}'],
+  ["and leaves every other workspace's row alone",
+    JSON.stringify(M.nextWorkspaceServeConfig(
+      {workspaceServe: {two: {serveCommand: "x"}}}, "one", { serveCommand: "npm run dev" })),
+    '{"two":{"serveCommand":"x"},"one":{"serveCommand":"npm run dev","envPath":""}}'],
+  ["blanking both fields drops the workspace from the map",
+    JSON.stringify(M.nextWorkspaceServeConfig(
+      {workspaceServe: {one: {serveCommand: "npm run dev"}}}, "one", { serveCommand: "" })),
+    "{}"],
   ["the review state follows in-progress",
     M.stateAfterPr(prRefs, {workflowStateId: 7002}).name, "Code Review"],
   ["from before work started, the first in-progress one",

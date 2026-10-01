@@ -804,6 +804,8 @@ Item {
         + (root.draftDirty() ? "Esc twice cancels" : (root.composeFrom ? "Esc back" : "Esc closes"))
     if (root.store && root.store.solving)
       return "Starting the agent in Herdr…"
+    if (root.store && root.store.serving)
+      return "Starting it in Herdr…"
     if (root.store && root.store.solveError && root.mode === "mine" && root.storyOpen)
       return root.store.solveError
     if (root.store && root.store.openingPr)

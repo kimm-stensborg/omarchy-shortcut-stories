@@ -752,6 +752,24 @@ Item {
             font.pixelSize: Style.font.body
           }
 
+          // Run the workspace's serve command for it. Visible whenever there
+          // is somewhere for it to run -- not whether one is configured,
+          // since the workspace list this needs to check that is not even
+          // fetched yet the first time the plain list is open. Clicking with
+          // nothing configured says so in the footer instead.
+          Button {
+            visible: Model.serveAvailable(row.story, pane.store ? pane.store.solveStatus : null)
+            Layout.preferredHeight: nameText.implicitHeight
+            horizontalPadding: Style.space(2)
+            verticalPadding: 0
+            bordered: false
+            text: ""
+            tooltipText: "Run this workspace's serve command"
+            foreground: pane.muted
+            fontFamily: pane.fontFamily
+            onClicked: if (pane.store) pane.store.launchServe(row.story)
+          }
+
           // Whose it is, when the list is the whole team's.
           Text {
             visible: pane.owner === "team"

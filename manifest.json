@@ -28,7 +28,8 @@
       "defaultMode": "mine",
       "defaultType": "feature",
       "refreshMinutes": 5,
-      "defaultOwner": "me"
+      "defaultOwner": "me",
+      "workspaceServe": {}
     },
     "schema": [
       {

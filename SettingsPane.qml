@@ -114,6 +114,19 @@ Item {
             }
           }
 
+          // Outside Model.SETTINGS entirely -- one row per Herdr workspace,
+          // however many there are, not one fixed row per static key.
+          WorkspaceServeSettings {
+            width: settingsFlick.width
+            workspaces: pane.store ? pane.store.workspaces : null
+            settings: pane.settings
+            fg: pane.foreground
+            muted: pane.muted
+            fontFamily: pane.fontFamily
+            onChanged: function(label, patch) { if (pane.store) pane.store.persistServeConfig(label, patch) }
+            onEditingChanged: pane.editing = editing
+          }
+
           // At the end of the page rather than pinned under it: a fixed line
           // there took the room the last card needed and cut it off.
           Text {
