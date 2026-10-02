@@ -743,13 +743,25 @@ Item {
             onClicked: Quickshell.execDetached(["omarchy-launch-browser", row.story.prUrl])
           }
 
-          // An agent Solve started on it: accent when it wants you back.
+          // An agent Solve started on it: accent when it wants you back, and
+          // breathing while it works, like the pill on the story itself.
           Text {
+            id: agentIcon
+            readonly property bool working: !!row.agent && row.agent.status === "working"
             visible: !!row.agent
             text: "󰚩"
             color: row.agent && row.agent.attention ? pane.accent : pane.muted
             font.family: pane.fontFamily
             font.pixelSize: Style.font.body
+
+            onWorkingChanged: if (!working) opacity = 1
+
+            SequentialAnimation on opacity {
+              running: agentIcon.working && agentIcon.visible
+              loops: Animation.Infinite
+              NumberAnimation { to: 0.4; duration: 900; easing.type: Easing.InOutSine }
+              NumberAnimation { to: 1; duration: 900; easing.type: Easing.InOutSine }
+            }
           }
 
           // Run the workspace's up or down script for it. Visible whenever

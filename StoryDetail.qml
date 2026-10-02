@@ -335,6 +335,10 @@ Item {
         }
 
         Button {
+          id: agentPill
+          // Breathes while the agent is at it, so a glance tells working from
+          // stopped; still again once it waits for you or is done.
+          readonly property bool working: !!view.solveProgress && view.solveProgress.status === "working"
           visible: !!view.solveProgress
           bordered: true
           iconText: "󰚩"
@@ -346,6 +350,15 @@ Item {
           iconSize: Style.font.caption
           horizontalPadding: Style.space(8)
           verticalPadding: Style.space(3)
+
+          onWorkingChanged: if (!working) opacity = 1
+
+          SequentialAnimation on opacity {
+            running: agentPill.working && agentPill.visible
+            loops: Animation.Infinite
+            NumberAnimation { to: 0.4; duration: 900; easing.type: Easing.InOutSine }
+            NumberAnimation { to: 1; duration: 900; easing.type: Easing.InOutSine }
+          }
         }
 
         Repeater {
